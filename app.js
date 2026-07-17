@@ -37,11 +37,11 @@ let streamWs=null,streamRoom=null,streamServer=null;
 // The sender only waits when bufferedAmount exceeds this; the low-threshold
 // is set below it so we refill before the buffer fully drains.
 const SEND_WINDOW=16*1024*1024;
-let drainWait=null;function awaitDrain(){if(files.bufferedAmount<=files.bufferedAmountLowThreshold)return Promise.resolve();if(!drainWait)drainWait=new Promise(r=>{const h=()=>{files.removeEventListener('bufferedamountlow',h);drainWait=null;r()};files.addEventListener('bufferedamountlow',h)});return drainWait}
+async function awaitDrain(){const f=files;if(!f||f.readyState!=='open'||f.bufferedAmount<=f.bufferedAmountLowThreshold)return;for(let i=0;i<500;i++){if(!files||files.readyState!=='open')return;if(files.bufferedAmount<=files.bufferedAmountLowThreshold)return;await new Promise(r=>setTimeout(r,20))}}
 // Send a JSON control message over the WebRTC chat channel. If the channel is
 // closed mid-send we throw a typed error the caller can treat as "aborted"
 // rather than letting an unhandled rejection break the send chain.
-async function safeSend(data){for(;;){try{files.send(data);return}catch(e){const m=String(e?.message||'').toLowerCase();if(m.includes('send queue is full')||m.includes('buffered')){await awaitDrain();continue}if(m.includes('invalid state')||m.includes('closed')||m.includes('not connected'))throw new Error('disconnected');throw e}}}
+async function safeSend(data){const f=files;if(!f||f.readyState!=='open')throw new Error('disconnected');for(let i=0;i<3;i++){try{f.send(data);return}catch(e){const m=String(e?.message||'').toLowerCase();if(m.includes('invalid state')||m.includes('closed')||m.includes('not connected'))throw new Error('disconnected');await awaitDrain()}}throw new Error('send failed after retries')}
 // Send over whichever file bus is active, applying backpressure so we don't
 // overflow the socket's send buffer. The relay socket uses bufferedAmount; the
 // WebRTC channel uses bufferedAmount + the bufferedamountlow event.
@@ -101,7 +101,7 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   // even after endCall nulls its track and the receiver track is momentarily
   // unavailable — which would otherwise fall through to a second m-line.
   try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch{audioTransceiver=null}
-  let remoteAudioSource=null;pc.ontrack=e=>{if(e.track.kind==='audio'){try{const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;    e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playVia=ctx=>{try{remoteAudioSource?.disconnect();remoteAudioSource=ctx.createMediaStreamSource(stream);remoteAudioSource.connect(ctx.destination)}catch{}};const ctx=sfxCtx();if(ctx&&ctx.state!=='suspended'){playVia(ctx)}else{const tryPlay=()=>{const c=sfxCtx();if(c&&c.state!=='suspended'){playVia(c)}else{setTimeout(tryPlay,500)}};tryPlay()}}catch{}}};
+  let remoteAudioRetry=null;pc.ontrack=e=>{if(e.track.kind==='audio'){try{const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;    e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();const onGesture=()=>{playNow();document.removeEventListener('pointerdown',onGesture,true);document.removeEventListener('keydown',onGesture,true)};document.addEventListener('pointerdown',onGesture,true);document.addEventListener('keydown',onGesture,true)}catch{}}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -349,7 +349,7 @@ async function startCall(){
     playSound('ring');try{send({t:'call-ring'})}catch{}
     callStatus.textContent='Voice live';callStatus.className='call-status live';
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0')},1000);
-  }catch(e){endCall(true);callStatus.textContent='Mic denied — check permissions';callStatus.className='call-status';}
+  }catch(e){endCall(true);const m=String(e?.message||e||'');if(/not\s*found/i.test(m))callStatus.textContent='No mic found — check your microphone connection';else if(/permission|denied|not\s*allowed/i.test(m))callStatus.textContent='Mic access blocked — allow microphone in browser/app settings';else callStatus.textContent='Mic error — '+(e?.message||e);callStatus.className='call-status';}
 }
 // Tear down the call and release the mic. `silent` skips UI churn when called
 // from a disconnect.
