@@ -122,7 +122,7 @@ function performInstall() {
   pendingInstall = null;
   // Opening the NSIS installer while the app is still running causes file-in-use
   // errors, so quit first. NSIS then runs and replaces the app.
-  shell.openPath(p).then(() => app.quit(), () => { pendingInstall = p; });
+  shell.openPath(p).then(err => { if (!err) app.quit(); else pendingInstall = p; });
 }
 
 function startAutoUpdater(explicitFeed) {

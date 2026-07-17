@@ -1,5 +1,4 @@
 const { app, BrowserWindow, session, dialog, ipcMain } = require('electron');
-const os = require('os');
 const path = require('path');
 const fs = require('fs');
 require('./server.js');
