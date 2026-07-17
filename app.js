@@ -4,6 +4,9 @@ let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promis
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
 let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null;
+// Direct handle to the audio transceiver created in setupPeer, so startCall can
+// always reuse it (never add a second m-line). Nulled on disconnect/teardown.
+let audioTransceiver=null;
 // Per-connection sound flags so the chimes don't double/triple: chat+files both
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
 let connectSoundDone=false,friendLeftNotified=false;
@@ -68,8 +71,11 @@ async function busSend(data){const bus=fileBus();if(!bus)throw new Error('no fil
 function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // Negotiate a bidirectional audio transceiver up front so voice works without
   // a renegotiation round-trip once the call starts. No track is attached until
-  // the user clicks Start voice, keeping the mic off until then.
-  try{const t=pc.addTransceiver('audio',{direction:'sendrecv'});t.setDirection('sendrecv')}catch{}
+  // the user clicks Start voice, keeping the mic off until then. Keep a direct
+  // reference so startCall always reuses THIS transceiver (never addTransceiver),
+  // even after endCall nulls its track and the receiver track is momentarily
+  // unavailable — which would otherwise fall through to a second m-line.
+  try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch{audioTransceiver=null}
   pc.ontrack=e=>{if(e.track.kind==='audio'){try{remoteAudio.srcObject=e.streams[0]||new MediaStream([e.track]);remoteAudio.muted=false;    e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const tryPlay=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{/* autoplay may reject once; retry shortly after a gesture */setTimeout(tryPlay,400)})};tryPlay()}catch{}}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
@@ -237,7 +243,7 @@ function disconnectRoom(){if(chat)chat.onmessage=null,chat.close();if(files)file
   if(drainWait){const r=drainWait;drainWait=null;try{r()}catch{}}
   busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
-  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
+  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;audioTransceiver=null;setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 $('#leaveRoom').onclick=()=>disconnectRoom();
 // Clear-list button: tears down any in-flight transfers and empties the list.
 const clearBtn=$('#clearTransfers');
@@ -272,19 +278,20 @@ async function startCall(){
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    // The room may have been left (or the call ended) while the permission prompt
+    // was pending. If so, discard the freshly granted mic and bail — otherwise the
+    // stream leaks (mic stays on) and would attach to a dead connection.
+    if(!pc){localStream.getTracks().forEach(t=>t.stop());localStream=null;return}
     // The audio transceiver was already negotiated as sendrecv during connect.
     // Reuse its existing sender via replaceTrack so we DON'T add a second m-line
     // (which would require an unhandled renegotiation). If no sender exists yet,
     // attach the track normally.
     const track=localStream.getAudioTracks()[0];
-    // The audio transceiver was negotiated as sendrecv during connect, so it
-    // always exists. Reuse its sender via replaceTrack — even if a previous call
-    // left it with a null track (endCall does replaceTrack(null)). Match by the
-    // transceiver's audio kind, NOT by s.track, because a stopped sender has no
-    // track and would otherwise fall through to addTransceiver and create a
-    // second m-line (an unhandled renegotiation that breaks the next call).
-    const audioTransceiver=pc.getTransceivers().find(t=>t.receiver&&t.receiver.track&&t.receiver.track.kind==='audio');
-    const sender=audioTransceiver?audioTransceiver.sender:pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
+    // Reuse the existing audio transceiver's sender via replaceTrack — even after
+    // a previous call left it with a null track (endCall does replaceTrack(null)).
+    // Prefer the stored handle; fall back to scanning if it was somehow lost.
+    const at=audioTransceiver||pc.getTransceivers().find(t=>(t.receiver.track&&t.receiver.track.kind==='audio')||(t.sender.track&&t.sender.track.kind==='audio'));
+    const sender=at?at.sender:pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
     if(sender){try{sender.replaceTrack(track)}catch{}}else{const t=pc.addTransceiver('audio',{direction:'sendrecv'});try{t.sender.replaceTrack(track)}catch{}}
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
     // Play the calling jingle locally and let the friend hear a ring too.
