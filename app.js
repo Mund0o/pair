@@ -86,7 +86,7 @@ async function sendFile(file,retryId){if(file.size>MAX)return alert('This file i
     if(pending.length%16===0)await Promise.race(pending)}}
   await pump();
   await Promise.all(pending);
-  if(!ctrl.abort){await safeSend(JSON.stringify({t:'end',seq}));el.querySelector('.transfer-status').textContent='Sent';el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';setPeerPct(el,100);cancelBtn.hidden=true}  }catch(e){const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);if(!ctrl.abort)aw.reject(e)}  if(ctrl.abort||(e&&e.message==='Cleared')){el.querySelector('.transfer-status').textContent='Cancelled'}else if(e&&e.message==='rejected'){const s=el.querySelector('.transfer-status');s.textContent='Declined by friend';s.classList.add('declined')}else{const s=el.querySelector('.transfer-status');s.textContent='Failed: '+(e?.message||e);s.classList.add('failed')}el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';cancelBtn.hidden=true;retryBtn.hidden=false;retryBtn.onclick=()=>{el.remove();sendFile(file,seq);};try{await safeSend(JSON.stringify({t:'end',seq,cancelled:true}))}catch{}}outTransfers.delete(seq);});cancelBtn.onclick=()=>{const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);aw.reject(new Error('Cancelled'))}ctrl.abort=true;cancelBtn.hidden=true}}
+  if(!ctrl.abort){await safeSend(JSON.stringify({t:'end',seq}));el.querySelector('.transfer-status').textContent='Sent';el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';setPeerPct(el,100);cancelBtn.hidden=true}  }catch(e){const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);if(!ctrl.abort)aw.reject(e)}  if(ctrl.abort||(e&&e.message==='Cleared')||(e&&e.message==='disconnected')){el.querySelector('.transfer-status').textContent='Cancelled'}else if(e&&e.message==='rejected'){const s=el.querySelector('.transfer-status');s.textContent='Declined by friend';s.classList.add('declined')}else{const s=el.querySelector('.transfer-status');s.textContent='Failed: '+(e?.message||e);s.classList.add('failed')}el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';cancelBtn.hidden=true;retryBtn.hidden=false;retryBtn.onclick=()=>{el.remove();sendFile(file,seq);};try{await busSafeSend(JSON.stringify({t:'end',seq,cancelled:true}))}catch{}}outTransfers.delete(seq);});cancelBtn.onclick=()=>{const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);aw.reject(new Error('Cancelled'))}ctrl.abort=true;cancelBtn.hidden=true}}
 // Active incoming transfers, keyed by their seq (so multiple files in flight
 // are kept separate). Chunks carry seq in their frame header and route here.
 const activeTransfers=new Map();
@@ -185,7 +185,7 @@ async function processIncoming(t){const POOL=8;const queue=t.writeQueue;let acti
   if(t.stuck)throw t.stuck;
   if(t.writeError)throw t.writeError;
   await flushBatch();
-  }finally{clearInterval(watchdog);}
+  }finally{clearInterval(watchdog);try{await flushBatch()}catch{}}
 }
 setStatus('Not connected');
 
@@ -243,7 +243,10 @@ refreshClearBtn();
 // Start/stop a two-way audio call over the existing peer connection. The audio
 // transceiver was negotiated during setup, so we only attach the mic here.
 async function startCall(){
-  if(callActive||!pc)return;
+  // Only start once connected. Starting before the peer connection is stable
+  // could addTrack/renegotiate and create a second audio m-line the app can't
+  // handle.
+  if(callActive||!pc||pc.connectionState!=='connected')return;
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
@@ -272,6 +275,9 @@ function endCall(silent){
   // negotiated transceiver, so no renegotiation is triggered (the app doesn't
   // handle mid-call renegotiation). The peer's receiver just gets silence.
   if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}
+  // Drop our sender's track so a stopped track doesn't linger on the transceiver
+  // (which would otherwise keep matching in startCall and complicate reconnects).
+  if(pc){try{pc.getSenders().forEach(s=>{if(s.track&&s.track.kind==='audio'){try{s.replaceTrack(null)}catch{}}})}catch{}}
   // Drop the remote audio element's source so a stale stream can't keep playing
   // after the call ends or the room is left.
   try{remoteAudio.srcObject=null}catch{}

@@ -125,7 +125,12 @@ const httpServer = http.createServer((req, res) => {
     }
     const rel = path.normalize(urlPath).replace(/^(\.\.[\/\\])+/, '');
     const file = path.join(PUBLIC_DIR, rel);
-    if (!file.startsWith(PUBLIC_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    // Contain path traversal: the resolved file must live inside PUBLIC_DIR and
+    // not in a same-prefix sibling (e.g. PUBLIC_DIR="…/public" must not match
+    // "…/public_notes"). Require a path separator after the resolved base.
+    const base = path.resolve(PUBLIC_DIR);
+    const resolved = path.resolve(file);
+    if (resolved !== base && !resolved.startsWith(base + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
       return;

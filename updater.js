@@ -108,6 +108,7 @@ async function checkOnce(feedUrl) {
 
 let pendingInstall = null;
 let timer = null;
+let beforeQuitRegistered = false;
 
 // Called by the renderer (Windows) when the user clicks "Restart to update".
 function performInstall() {
@@ -123,14 +124,21 @@ function startAutoUpdater(explicitFeed) {
   // Prefer an explicit feed (e.g. the same host the user already configured for
   // signaling), then env, then ~/.pair-update-url, then localhost.
   const feedUrl = explicitFeed || readFeedUrl();
+  // Idempotent: this can be called on startup AND again whenever the renderer
+  // sends a new feed (pair:setFeed). Clear any prior timer so we never stack
+  // multiple 30-minute intervals (which would multiply downloads/installs) or
+  // register duplicate before-quit listeners.
+  if (timer) clearInterval(timer);
+  if (!beforeQuitRegistered) {
+    app.on('before-quit', () => {
+      if (pendingInstall) shell.openPath(pendingInstall.path);
+      pendingInstall = null;
+    });
+    beforeQuitRegistered = true;
+  }
   // First check shortly after boot (let the window finish loading), then repeat.
   setTimeout(() => checkOnce(feedUrl), 4000);
   timer = setInterval(() => checkOnce(feedUrl), CHECK_INTERVAL);
-  // Install any downloaded update when the app is closing.
-  app.on('before-quit', () => {
-    if (pendingInstall) shell.openPath(pendingInstall.path);
-    pendingInstall = null;
-  });
 }
 
 module.exports = { startAutoUpdater, performInstall };

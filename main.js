@@ -30,6 +30,14 @@ ipcMain.handle('pair:saveStart', async (_e, name) => {
     buttonLabel: 'Save'
   });
   if (result.canceled || !result.filePath) return { ok: false };
+  // A cancel may have arrived while the dialog was open (closeStream already ran
+  // and nulled writeStream). If a stream was opened in the meantime by another
+  // call, don't clobber it; if not, opening here is safe. Re-check to avoid
+  // leaving an orphaned, never-closed write stream on disk.
+  if (writeStream) {
+    try { writeStream.destroy(); } catch {}
+    writeStream = null;
+  }
   writeStream = fs.createWriteStream(result.filePath);
   writeStream.on('error', err => { writeFailed = err; });
   return { ok: true, path: result.filePath };
