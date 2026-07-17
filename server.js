@@ -190,7 +190,10 @@ httpServer.on('error', err => {
     console.warn(`Port ${port} is already in use — another Pair server or process is listening. Signaling will rely on that instance; this app will not start its own.`);
     return;
   }
-  throw err;
+  // Any other listen error is logged, not thrown, so it can't crash the whole
+  // Electron app (server.js is required by main.js). The app still runs; it
+  // just won't serve signaling/update files on this port.
+  console.error(`Pair server failed to start on port ${port}:`, err.message);
 });
 
 httpServer.listen(port, '0.0.0.0', () => {

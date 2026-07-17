@@ -28,7 +28,7 @@ const OUT = path.join(ROOT, 'public');
 const GITHUB_REPO = (process.env.PAIR_GITHUB_REPO || 'Mund0o/pair').trim().replace(/\/$/, '');
 
 if (!fs.existsSync(SRC)) {
-  console.error('No dist8/ folder found. Build first (npm run dist).');
+  console.error('No dist/ folder found. Build first (npm run dist).');
   process.exit(1);
 }
 
@@ -69,7 +69,7 @@ const gotBlock = copyIf(winBlockmap);
 const gotTar = copyIf(linuxTar);
 
 if (!gotExe || !gotTar) {
-  console.error('Missing build artifacts in dist8/:');
+  console.error('Missing build artifacts in dist/:');
   console.error('  expected:', winExe, 'and', linuxTar);
   console.error('  Build with: npm run dist');
   process.exit(1);

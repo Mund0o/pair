@@ -13,7 +13,11 @@ let streamWs=null,streamRoom=null,streamServer=null;
 // The sender only waits when bufferedAmount exceeds this; the low-threshold
 // is set below it so we refill before the buffer fully drains.
 const SEND_WINDOW=16*1024*1024;
-let drainWait=null;function awaitDrain(){if(files.bufferedAmount<=files.bufferedAmountLowThreshold)return Promise.resolve();if(!drainWait)drainWait=new Promise(r=>{const h=()=>{files.removeEventListener('bufferedamountlow',h);drainWait=null;r()};files.addEventListener('bufferedamountlow',h)});return drainWait}async function safeSend(data){for(;;){try{files.send(data);return}catch(e){if(!String(e?.message||'').includes('send queue is full'))throw e;await awaitDrain()}}}
+let drainWait=null;function awaitDrain(){if(files.bufferedAmount<=files.bufferedAmountLowThreshold)return Promise.resolve();if(!drainWait)drainWait=new Promise(r=>{const h=()=>{files.removeEventListener('bufferedamountlow',h);drainWait=null;r()};files.addEventListener('bufferedamountlow',h)});return drainWait}
+// Send a JSON control message over the WebRTC chat channel. If the channel is
+// closed mid-send we throw a typed error the caller can treat as "aborted"
+// rather than letting an unhandled rejection break the send chain.
+async function safeSend(data){for(;;){try{files.send(data);return}catch(e){const m=String(e?.message||'').toLowerCase();if(m.includes('send queue is full')||m.includes('buffered')){await awaitDrain();continue}if(m.includes('invalid state')||m.includes('closed')||m.includes('not connected'))throw new Error('disconnected');throw e}}}
 // Send over whichever file bus is active, applying backpressure so we don't
 // overflow the socket's send buffer. The relay socket uses bufferedAmount; the
 // WebRTC channel uses bufferedAmount + the bufferedamountlow event.
@@ -36,7 +40,7 @@ async function seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));c
 async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(o.iv)},sharedKey,new Uint8Array(o.data)))}
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
 function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}function addMessage(text,mine=false){$('.empty')?.remove();const el=document.createElement('div');el.className='message '+(mine?'mine':'');el.innerHTML='<div class="bubble"></div><div class="meta">'+(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+'</div>';el.querySelector('.bubble').textContent=text;messages.append(el);messages.scrollTop=messages.scrollHeight}
-function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)))}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e))};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);if(streamWs.readyState===WebSocket.OPEN)setStatus('Connected directly',true)}}
+function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)))}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e))};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 async function busSend(data){const bus=fileBus();if(!bus)throw new Error('no file channel');if(typeof data==='string')bus.send(data);else bus.send(data)}
@@ -193,19 +197,28 @@ if(window.pairEnv&&window.pairEnv.setFeed){try{let s=localStorage.getItem('pair.
 
 let signaling;
 async function automaticPair(kind){
+  // Tear down any prior session so a second Host/Join click (or host→leave→host)
+  // doesn't leak an old pc/signaling whose handlers fire stale signals.
+  if(pc||signaling)disconnectRoom();
   role=kind; const address=$('#signalServer').value.trim(); const room=$('#roomCode').value.trim();
   if(!address||!room)return pairHint.textContent='Enter a signaling address and room code.';
   pairHint.textContent='Connecting to signaling server…'; signaling=new WebSocket(address);
   signaling.onopen=()=>{signaling.send(JSON.stringify({type:'join',room}));pairHint.textContent='Waiting for your friend in room '+room.toUpperCase()+'…'};
   signaling.onerror=()=>pairHint.textContent='Could not reach the signaling server. Check the address and firewall.';
-  signaling.onmessage=async event=>{const message=JSON.parse(event.data);if(message.type==='full'){pairHint.textContent='That room already has two people.';return}if(message.type==='peer-ready'&&role==='host'){setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));pairHint.textContent='Offer sent. Connecting…'}if(message.type==='signal'){const remote=message.payload;if(remote.kind==='offer'&&role==='join'){setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});await derive(kp,remote.pub);await pc.setLocalDescription(await pc.createAnswer());await waitIce();signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'}else if(remote.kind==='answer'&&role==='host'){await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});await derive(pc._kp,remote.pub);openStreamRelay(address,room);pairHint.textContent='Secure connection established.'}}};
+  signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);if(message.type==='full'){pairHint.textContent='That room already has two people.';return}if(message.type==='peer-ready'&&role==='host'){setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));openStreamRelay(address,room);pairHint.textContent='Offer sent. Connecting…'}if(message.type==='signal'){const remote=message.payload;if(remote.kind==='offer'&&role==='join'){setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});await derive(kp,remote.pub);await pc.setLocalDescription(await pc.createAnswer());await waitIce();signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'}else if(remote.kind==='answer'&&role==='host'){await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});await derive(pc._kp,remote.pub);openStreamRelay(address,room);pairHint.textContent='Secure connection established.'}}}catch(e){console.warn('signaling message error',e)}};
 }
 // Open the separate relay socket used to move file bytes. Same host + room as
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{};streamWs.onclose=()=>{};}catch{streamWs=null}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
-function disconnectRoom(){if(chat)chat.onmessage=null,chat.close();if(files)files.onmessage=null,files.close();if(pc)pc.close();pc=chat=files=null;if(signaling){try{signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;drainWait=null;endCall(true);sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
-  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();busDrains.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
+function disconnectRoom(){if(chat)chat.onmessage=null,chat.close();if(files)files.onmessage=null,files.close();if(pc)pc.close();pc=chat=files=null;if(signaling){try{signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;
+  // Release any pending backpressure waiters so in-flight sends don't hang
+  // forever after the bus is closed. They'll re-check fileBus(), find it gone,
+  // and the send loop will abort cleanly.
+  if(drainWait){const r=drainWait;drainWait=null;try{r()}catch{}}
+  busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();
+  endCall(true);sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
+  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 $('#leaveRoom').onclick=()=>disconnectRoom();
 // Clear-list button: tears down any in-flight transfers and empties the list.
 const clearBtn=$('#clearTransfers');
@@ -239,13 +252,12 @@ async function startCall(){
     // (which would require an unhandled renegotiation). If no sender exists yet,
     // attach the track normally.
     const track=localStream.getAudioTracks()[0];
-    // Reuse the existing audio sender (from the negotiated transceiver) via
-    // replaceTrack, even if its previous track was stopped. This keeps the
-    // single negotiated m-line and avoids an unhandled renegotiation. Only fall
-    // back to addTrack if no audio sender exists at all.
+    // The audio transceiver was negotiated as sendrecv during connect, so it
+    // always has a sender. Reuse it via replaceTrack (even if its previous track
+    // was stopped). Never addTrack — that would create a second m-line and an
+    // unhandled renegotiation.
     const sender=pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
-    if(sender){try{sender.replaceTrack(track);}catch{try{pc.addTrack(track,localStream)}catch{}}}
-    else pc.addTrack(track,localStream);
+    if(sender){try{sender.replaceTrack(track)}catch{}}else{const t=pc.addTransceiver('audio',{direction:'sendrecv'});try{t.sender.replaceTrack(track)}catch{}}
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
     callStatus.textContent='Voice live';callStatus.className='call-status live';
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0')},1000);
@@ -260,6 +272,9 @@ function endCall(silent){
   // negotiated transceiver, so no renegotiation is triggered (the app doesn't
   // handle mid-call renegotiation). The peer's receiver just gets silence.
   if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}
+  // Drop the remote audio element's source so a stale stream can't keep playing
+  // after the call ends or the room is left.
+  try{remoteAudio.srcObject=null}catch{}
   callActive=false;micMuted=false;
   callBtn.textContent='🎙 Start voice';muteBtn.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
   if(!silent){callBtn.disabled=!pc;}
