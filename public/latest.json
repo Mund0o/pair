@@ -1,7 +1,7 @@
 {
-  "version": "1.0.1",
-  "notes": "Update available.",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.1/Pair.Setup.1.0.1.exe",
-  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.1/Pair.Setup.1.0.1.exe.blockmap",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.1/pair-p2p-1.0.1.tar.gz"
+  "version": "1.0.2",
+  "notes": "Fix ECDH key usage bug preventing connection",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.2/Pair.Setup.1.0.2.exe",
+  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.2/Pair.Setup.1.0.2.exe.blockmap",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.2/pair-p2p-1.0.2.tar.gz"
 }
