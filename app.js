@@ -64,7 +64,7 @@ async function seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));c
 async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(o.iv)},sharedKey,new Uint8Array(o.data)))}
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
 function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}function addMessage(text,mine=false){$('.empty')?.remove();const el=document.createElement('div');el.className='message '+(mine?'mine':'');el.innerHTML='<div class="bubble"></div><div class="meta">'+(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+'</div>';el.querySelector('.bubble').textContent=text;messages.append(el);messages.scrollTop=messages.scrollHeight}
-function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));else if(o.t==='call-ring')playSound('ring');else if(o.t==='call-end'){if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
+function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));      else if(o.t==='call-ring'){playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 
@@ -102,7 +102,9 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   // even after endCall nulls its track and the receiver track is momentarily
   // unavailable — which would otherwise fall through to a second m-line.
   try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch{audioTransceiver=null}
-  pc.ontrack=e=>{if(e.track.kind==='audio'){try{const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;    e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();const onGesture=()=>{playNow();document.removeEventListener('pointerdown',onGesture,true);document.removeEventListener('keydown',onGesture,true)};document.addEventListener('pointerdown',onGesture,true);document.addEventListener('keydown',onGesture,true)}catch{}}};
+  function sinkRemoteAudio(ctx,stream){try{if(!ctx||ctx.state==='suspended')return;const src=ctx.createMediaStreamSource(stream);src.connect(ctx.destination);return src}catch{}}
+  function setupPermanentAudioSink(){try{const ctx=sfxCtx();const st=remoteAudio.srcObject;if(!ctx||!st||!st.getAudioTracks().length)return;if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}ctx.audioSink=sinkRemoteAudio(ctx,st)}catch{}}
+  pc.ontrack=e=>{if(e.track.kind==='audio'){try{audioTransceiver=e.transceiver;const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}catch{}}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -338,22 +340,23 @@ async function startCall(){
     // (which would require an unhandled renegotiation). If no sender exists yet,
     // attach the track normally.
     const track=localStream.getAudioTracks()[0];
-    // Reuse the existing audio transceiver's sender via replaceTrack — even after
-    // a previous call left it with a null track (endCall does replaceTrack(null)).
-    // Prefer the stored handle; fall back to scanning if it was somehow lost.
-    const at=audioTransceiver||pc.getTransceivers().find(t=>(t.receiver.track&&t.receiver.track.kind==='audio')||(t.sender.track&&t.sender.track.kind==='audio'));
+    // Find the correct sender: prefer a transceiver that was actually negotiated
+    // (has a mid, meaning it's part of the SDP). audioTransceiver is updated by
+    // ontrack to always point at the real one, but we also check mid as a safety
+    // net in case ontrack hasn't fired yet.
+    const at=audioTransceiver&&audioTransceiver.mid?audioTransceiver:pc.getTransceivers().find(t=>t.mid&&t.receiver.track&&t.receiver.track.kind==='audio');
     const sender=at?at.sender:pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
-    if(sender){try{await sender.replaceTrack(track)}catch(e){callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';localStream.getTracks().forEach(t=>t.stop());localStream=null;return}}else{const t=pc.addTransceiver('audio',{direction:'sendrecv'});try{await t.sender.replaceTrack(track)}catch(e){callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';localStream.getTracks().forEach(t=>t.stop());localStream=null;return}}
+    if(sender){try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}}else{const t=pc.addTransceiver('audio',{direction:'sendrecv'});try{await t.sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}}
     // Re-trigger remote audio playback now that we're in a gesture (button click).
     // On Linux/PipeWire the initial ontrack play() often gets blocked by autoplay
     // policy and never retried because replaceTrack doesn't fire ontrack again.
     // Also re-acquire srcObject from the transceiver in case endCall previously
     // cleared it (e.g. on a temporary ICE drop).
-    if(!remoteAudio.srcObject){const at=audioTransceiver||pc.getTransceivers().find(t=>t.receiver.track&&t.receiver.track.kind==='audio');if(at){try{remoteAudio.srcObject=new MediaStream([at.receiver.track])}catch{}}}
+    if(!remoteAudio.srcObject){const at=pc.getTransceivers().find(t=>t.mid&&t.receiver.track&&t.receiver.track.kind==='audio');if(at){try{remoteAudio.srcObject=new MediaStream([at.receiver.track])}catch{}}}
     try{remoteAudio.muted=false;remoteAudio.play()}catch{}
-    // Also connect an AudioContext sink as a robust fallback against autoplay
+    // Connect a permanent AudioContext sink as a robust fallback against autoplay
     // restrictions. AudioContext can be resumed on gesture reliably across Linux.
-    try{const ctx=sfxCtx();if(ctx&&ctx.state==='suspended')ctx.resume();const src=remoteAudio.srcObject;if(src&&src.getAudioTracks().length){const ms=ctx.createMediaStreamSource(src);ms.connect(ctx.destination);setTimeout(()=>{try{ms.disconnect()}catch{}},100)}const playFallback=()=>{try{if(ctx&&ctx.state==='suspended')ctx.resume();const src=remoteAudio.srcObject;if(src&&src.getAudioTracks().length){const ms=ctx.createMediaStreamSource(src);ms.connect(ctx.destination);setTimeout(()=>{try{ms.disconnect()}catch{}},100)}}catch{}};document.addEventListener('pointerdown',playFallback,{once:true});document.addEventListener('keydown',playFallback,{once:true})}catch{}
+    setupPermanentAudioSink();
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
     // Play the calling jingle locally and let the friend hear a ring too.
     playSound('ring');try{send({t:'call-ring'})}catch{}
