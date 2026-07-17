@@ -44,6 +44,8 @@ const releaseBase = `https://github.com/${GITHUB_REPO}/releases/download/v${vers
 const winExe = `Pair Setup ${version}.exe`;
 const winBlockmap = `Pair Setup ${version}.exe.blockmap`;
 const linuxTar = `pair-p2p-${safeVersion}.tar.gz`;
+// GitHub release assets normalize spaces to dots in the download URL.
+const ghName = f => f.replace(/ /g, '.');
 
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -76,9 +78,9 @@ if (!gotExe || !gotTar) {
 const manifest = {
   version,
   notes: process.env.PAIR_NOTES || 'Update available.',
-  winUrl: `${releaseBase}/${winExe}`,
-  winBlockmapUrl: gotBlock ? `${releaseBase}/${winBlock}` : undefined,
-  linuxUrl: `${releaseBase}/${linuxTar}`
+  winUrl: `${releaseBase}/${ghName(winExe)}`,
+  winBlockmapUrl: gotBlock ? `${releaseBase}/${ghName(winBlockmap)}` : undefined,
+  linuxUrl: `${releaseBase}/${ghName(linuxTar)}`
 };
 
 fs.writeFileSync(path.join(OUT, 'latest.json'), JSON.stringify(manifest, null, 2) + '\n');
