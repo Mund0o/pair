@@ -90,7 +90,8 @@ function defaultTurnServers(){try{const pubIp='YOUR_PUBLIC_IP';return[
   {urls:'turn:'+pubIp+':3481?transport=tcp',...SELF_TURN}
 ]}catch{return[]}}
 const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}return defaultTurnServers()})();
-function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected'){if(connectTimer){clearTimeout(connectTimer);connectTimer=null}}if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}};pc.oniceconnectionstatechange=()=>{if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(pc.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  let wasEverConnected=false;
+  pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected'){if(connectTimer){clearTimeout(connectTimer);connectTimer=null}if(!wasEverConnected){wasEverConnected=true}else{setStatus('Connected directly',true)}}if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}};pc.oniceconnectionstatechange=()=>{if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(pc.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
   // network), surface a clear message instead of hanging on "Connecting…" forever.
   let connectTimer=null;function armConnectTimeout(){if(connectTimer||pc.connectionState==='connected')return;connectTimer=setTimeout(()=>{if(pc&&pc.connectionState!=='connected'&&pc.connectionState!=='failed'&&pc.connectionState!=='closed'){pairHint.textContent='Still connecting… if this persists, one of you is behind a strict NAT/firewall that blocks the peer connection. Try a different network or add a TURN server.'}},25000)}
@@ -287,7 +288,7 @@ async function automaticPair(kind){
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
-function disconnectRoom(){try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;
+function disconnectRoom(){try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
@@ -346,6 +347,9 @@ async function startCall(){
     // Re-trigger remote audio playback now that we're in a gesture (button click).
     // On Linux/PipeWire the initial ontrack play() often gets blocked by autoplay
     // policy and never retried because replaceTrack doesn't fire ontrack again.
+    // Also re-acquire srcObject from the transceiver in case endCall previously
+    // cleared it (e.g. on a temporary ICE drop).
+    if(!remoteAudio.srcObject){const at=audioTransceiver||pc.getTransceivers().find(t=>t.receiver.track&&t.receiver.track.kind==='audio');if(at){try{remoteAudio.srcObject=new MediaStream([at.receiver.track])}catch{}}}
     try{remoteAudio.muted=false;remoteAudio.play()}catch{}
     // Also connect an AudioContext sink as a robust fallback against autoplay
     // restrictions. AudioContext can be resumed on gesture reliably across Linux.
@@ -369,9 +373,10 @@ function endCall(silent){
   // Drop our sender's track so a stopped track doesn't linger on the transceiver
   // (which would otherwise keep matching in startCall and complicate reconnects).
   if(pc){try{pc.getSenders().forEach(s=>{if(s.track&&s.track.kind==='audio'){try{s.replaceTrack(null)}catch{}}})}catch{}}
-  // Drop the remote audio element's source so a stale stream can't keep playing
-  // after the call ends or the room is left.
-  try{remoteAudio.srcObject=null}catch{}
+  // Only clear the remote audio element's source when the room is left
+  // (disconnectRoom), NOT on endCall. A temporary ICE drop would otherwise
+  // null the srcObject and ontrack never fires again for the same transceiver,
+  // permanently killing audio for the session.
   callActive=false;micMuted=false;
   callBtn.textContent='🎙 Start voice';muteBtn.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
   if(!silent){callBtn.disabled=!pc;try{send({t:'call-end'})}catch{}}
