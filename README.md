@@ -53,12 +53,12 @@ WebRTC cannot always connect two peers on different home networks directly — s
 
 **One-time setup:**
 
-1. Forward these ports on your router to this PC's LAN IP (`YOUR_LAN_IP`):
+1. Forward these ports on your router to this PC's LAN IP (replace `YOUR_LAN_IP` with your actual LAN IP, e.g. `YOUR_LAN_IP`):
    - TCP `3481` → internal `3478` (port 3478 was already taken by another device on this router)
    - UDP `3481` → internal `3478`
    - UDP `50100–50200` → internal `50100–50200` (the relay port range coturn uses; the 49152–49551 range is reserved by Windows)
 2. Start Docker Desktop, then double-click `coturn\start-coturn.bat` (or run `docker compose -f coturn\docker-compose.yml up -d`). coturn auto-restarts across reboots while Docker is running, so TURN stays available whenever either peer opens the app.
-3. That's it — the app already points at this relay (`YOUR_PUBLIC_IP:3481` on the WAN side, remapped to coturn's internal 3478) by default.
+3. That's it — the app already points at this relay (WAN port `3481`, remapped to coturn's internal `3478`). Replace `YOUR_PUBLIC_IP` in `turnserver.conf` with your actual public IP before starting.
 
 To verify it's reachable from outside your network, run from any other machine:
 

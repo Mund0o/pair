@@ -73,22 +73,23 @@ async function busSend(data){const bus=fileBus();if(!bus)throw new Error('no fil
 // TURN, WebRTC often can't traverse NAT and the connection hangs forever on
 // "Connecting…".
 //
-// Default points at the host's own coturn (YOUR_PUBLIC_IP) running via
-// coturn/docker-compose.yml. Both UDP and TCP transports are listed because
-// some networks block UDP entirely; the TCP variant lets those peers still
-// relay. Set PAIR_TURN env (JSON array) to override, e.g. for local dev or a
-// different relay.
+// Default points at the host's own coturn. Both UDP and TCP transports are
+// listed because some networks block UDP entirely; the TCP variant lets those
+// peers still relay. Set PAIR_TURN env (JSON array) to override these defaults
+// with your own TURN server, e.g.:
+//   set PAIR_TURN=[{"urls":"turn:YOUR_PUBLIC_IP:3481","username":"pair","credential":"YOUR_SECRET"}]
 // External TURN port is 3481 on the WAN side (forwarded to coturn's standard
 // 3478 internally) because port 3478 was already in use by another device on
 // this router. coturn still listens on 3478 inside the container; the router
 // rule remaps 3481 -> 3478.
 const SELF_TURN={username:'pair',credential:'cbb325a9723628e480bb2190014d531c'};
-const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}return[
+function defaultTurnServers(){try{const pubIp='YOUR_PUBLIC_IP';return[
   {urls:'stun:stun.l.google.com:19302'},
   {urls:'stun:stun1.l.google.com:19302'},
-  {urls:'turn:YOUR_PUBLIC_IP:3481?transport=udp',...SELF_TURN},
-  {urls:'turn:YOUR_PUBLIC_IP:3481?transport=tcp',...SELF_TURN}
-]})();
+  {urls:'turn:'+pubIp+':3481?transport=udp',...SELF_TURN},
+  {urls:'turn:'+pubIp+':3481?transport=tcp',...SELF_TURN}
+]}catch{return[]}}
+const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}return defaultTurnServers()})();
 function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected'){if(connectTimer){clearTimeout(connectTimer);connectTimer=null}}if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}};pc.oniceconnectionstatechange=()=>{if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(pc.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
   // network), surface a clear message instead of hanging on "Connecting…" forever.
