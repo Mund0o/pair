@@ -49,7 +49,7 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.go
   // a renegotiation round-trip once the call starts. No track is attached until
   // the user clicks Start voice, keeping the mic off until then.
   try{const t=pc.addTransceiver('audio',{direction:'sendrecv'});t.setDirection('sendrecv')}catch{}
-  pc.ontrack=e=>{if(e.track.kind==='audio'){remoteAudio.srcObject=e.streams[0]||new MediaStream([e.track]);try{remoteAudio.play().catch(()=>{})}catch{}}};
+  pc.ontrack=e=>{if(e.track.kind==='audio'){try{remoteAudio.srcObject=e.streams[0]||new MediaStream([e.track]);remoteAudio.muted=false;const tryPlay=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{/* autoplay may reject once; retry shortly after a gesture */setTimeout(tryPlay,400)})};tryPlay()}catch{}}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -243,10 +243,12 @@ refreshClearBtn();
 // Start/stop a two-way audio call over the existing peer connection. The audio
 // transceiver was negotiated during setup, so we only attach the mic here.
 async function startCall(){
-  // Only start once connected. Starting before the peer connection is stable
-  // could addTrack/renegotiate and create a second audio m-line the app can't
-  // handle.
-  if(callActive||!pc||pc.connectionState!=='connected')return;
+  // Don't start if a call is already active or there's no peer connection. We use
+  // replaceTrack (not addTrack), so attaching the mic never triggers a
+  // renegotiation — meaning we don't need to wait for connectionState==='connected'
+  // and risk silently no-op'ing a valid click. If the connection isn't ready yet,
+  // the track simply starts flowing as soon as DTLS completes.
+  if(callActive||!pc)return;
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
