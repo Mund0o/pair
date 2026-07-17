@@ -49,7 +49,7 @@ let streamWs=null,streamRoom=null,streamServer=null;
 // Keep a large amount of data in flight so the SCTP pipe stays saturated.
 // The sender only waits when bufferedAmount exceeds this; the low-threshold
 // is set below it so we refill before the buffer fully drains.
-const SEND_WINDOW=16*1024*1024;
+const SEND_WINDOW=32*1024*1024;
 async function awaitDrain(){const f=files;if(!f||f.readyState!=='open'||f.bufferedAmount<=f.bufferedAmountLowThreshold)return;for(let i=0;i<500;i++){if(!files||files.readyState!=='open')return;if(files.bufferedAmount<=files.bufferedAmountLowThreshold)return;await new Promise(r=>setTimeout(r,20))}}
 // Send a JSON control message over the WebRTC chat channel. If the channel is
 // closed mid-send we throw a typed error the caller can treat as "aborted"
@@ -58,7 +58,7 @@ async function safeSend(data){const f=files;if(!f||f.readyState!=='open')throw n
 // Send over whichever file bus is active, applying backpressure so we don't
 // overflow the socket's send buffer. The relay socket uses bufferedAmount; the
 // WebRTC channel uses bufferedAmount + the bufferedamountlow event.
-const busDrains=new Map();function awaitBusDrain(bus){if(bus.bufferedAmount<=SEND_WINDOW*0.75)return Promise.resolve();if(!bus||bus!==fileBus())return Promise.resolve();let waiters=busDrains.get(bus);if(!waiters){waiters=new Set();busDrains.set(bus,waiters)}return new Promise(r=>{let done=false;  const cleanup=()=>{if(done)return;done=true;clearInterval(timer);clearTimeout(timeout);try{bus.removeEventListener('bufferedamountlow',h)}catch{};waiters.delete(h)};const h=()=>{if(bus.bufferedAmount<=SEND_WINDOW*0.75||bus!==fileBus()){cleanup();r()}};const timer=setInterval(h,200);const timeout=setTimeout(()=>{cleanup();r()},30000);try{bus.addEventListener('bufferedamountlow',h)}catch{};waiters.add(h)})}
+const busDrains=new Map();function awaitBusDrain(bus){if(bus.bufferedAmount<=SEND_WINDOW*0.75)return Promise.resolve();if(!bus||bus!==fileBus())return Promise.resolve();let waiters=busDrains.get(bus);if(!waiters){waiters=new Set();busDrains.set(bus,waiters)}return new Promise(r=>{let done=false;  const cleanup=()=>{if(done)return;done=true;clearInterval(timer);clearTimeout(timeout);try{bus.removeEventListener('bufferedamountlow',h)}catch{};waiters.delete(h)};const h=()=>{if(bus.bufferedAmount<=SEND_WINDOW*0.75||bus!==fileBus()){cleanup();r()}};const timer=setInterval(h,50);const timeout=setTimeout(()=>{cleanup();r()},30000);try{bus.addEventListener('bufferedamountlow',h)}catch{};waiters.add(h)})}
 async function busSafeSend(data){let retries=0;for(;;){const bus=fileBus();if(!bus)throw new Error('no file channel');
   // Proactively wait if the socket's send buffer is already near the window, so
   // we never overflow it (which would throw and abort the whole transfer).
@@ -137,20 +137,34 @@ async function sendFile(file,retryId){if(file.size>MAX)return alert('This file i
   // crypto never gates the network. We wait only when the bus send buffer is
   // near SEND_WINDOW, and refill as soon as it drains. Over the relay socket
   // this saturates a LAN; over WebRTC it falls back to SCTP.
-  let offset=0,inflight=0;const pending=[];let lastPeerSent=0,lastPctSent=-1;
-  const pump=async()=>{while(offset<file.size&&!ctrl.abort){const bus=fileBus();if(!bus)throw new Error('disconnected');while(inflight>=SEND_WINDOW){await awaitBusDrain(bus);if(ctrl.abort)return}
-    const start=offset,end=Math.min(offset+CHUNK,file.size);offset=end;
-    const raw=await file.slice(start,end).arrayBuffer();
+  let inflight=0;const pending=[];let lastPeerSent=0,lastPctSent=-1;
+  // Overlap read+encrypt of the NEXT chunk with the send of the CURRENT chunk so
+  // that the CPU-bound encryption doesn't stall the pipeline on fast networks.
+  // Pre-read the first chunk before the loop; each iteration reads one ahead.
+  let preloadedStart=0;
+  let preloadedEnd=Math.min(CHUNK,file.size);
+  let preloaded=file.size>0?file.slice(preloadedStart,preloadedEnd).arrayBuffer():null;
+  let nextOfs=preloadedEnd;  // byte offset of the NEXT unread chunk
+  const emitPct=(done,pct)=>{el.querySelector('i').style.width=Math.min(100,done/file.size*100)+'%';el.querySelector('.transfer-status').textContent=pct+'%';updateStats(el,done,file.size,t0);const now=Date.now();if((pct!==lastPctSent&&now-lastPeerSent>250)||now-lastPeerSent>500){lastPctSent=pct;lastPeerSent=now;try{safeSend(JSON.stringify({t:'progress',seq,p:pct}))}catch{}}};
+  const pump=async()=>{while(preloaded){const bus=fileBus();if(!bus)throw new Error('disconnected');while(inflight>=SEND_WINDOW){await awaitBusDrain(bus);if(ctrl.abort)return}
+    // Start reading the NEXT chunk now, in parallel with encrypt+send of this one.
+    const readStart=nextOfs;
+    const readEnd=Math.min(readStart+CHUNK,file.size);
+    const nextRead=readStart<file.size?file.slice(readStart,readEnd).arrayBuffer():null;
+    nextOfs=readEnd;
+    // Encrypt+pack+send the PREVIOUSLY pre-loaded chunk.
+    const raw=await preloaded;if(ctrl.abort)return;
     const {iv,data}=await sealBytes(new Uint8Array(raw));
-    const frame=packChunk(seq,start,new Uint8Array(iv),new Uint8Array(data),end>=file.size);
+    const frame=packChunk(seq,preloadedStart,new Uint8Array(iv),new Uint8Array(data),preloadedEnd>=file.size);
     inflight+=frame.byteLength;
     const p=busSafeSend(frame).finally(()=>{inflight-=frame.byteLength});
     pending.push(p);
-    const done=end;const pct=Math.round(done/file.size*100);el.querySelector('i').style.width=Math.min(100,done/file.size*100)+'%';el.querySelector('.transfer-status').textContent=pct+'%';updateStats(el,done,file.size,t0);
-    // Mirror our progress to the peer (throttled to ~2/sec and on whole-% change).
-    const now=Date.now();if((pct!==lastPctSent&&now-lastPeerSent>250)||now-lastPeerSent>500){lastPctSent=pct;lastPeerSent=now;try{safeSend(JSON.stringify({t:'progress',seq,p:pct}))}catch{}}
-    // Light yield so the progress UI and other messages stay responsive.
-    if(pending.length%16===0)await Promise.race(pending.map(p=>p.catch(()=>{})))}}
+    const done=preloadedEnd;const pct=Math.round(done/file.size*100);emitPct(done,pct);
+    // Advance the preload to the chunk we just started reading.
+    preloaded=nextRead;
+    preloadedStart=readStart;
+    preloadedEnd=readEnd;
+    if(pending.length%32===0)await Promise.race(pending.map(p=>p.catch(()=>{})))}}
   await pump();
   await Promise.all(pending);
   if(!ctrl.abort){await safeSend(JSON.stringify({t:'end',seq}));el.querySelector('.transfer-status').textContent='Sent';el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';setPeerPct(el,100);cancelBtn.hidden=true}  }catch(e){const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);if(!ctrl.abort)aw.reject(e)}  if(ctrl.abort||(e&&e.message==='Cleared')||(e&&e.message==='disconnected')){el.querySelector('.transfer-status').textContent='Cancelled'}else if(e&&e.message==='rejected'){const s=el.querySelector('.transfer-status');s.textContent='Declined by friend';s.classList.add('declined')}else{const s=el.querySelector('.transfer-status');s.textContent='Failed: '+(e?.message||e);s.classList.add('failed')}el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';cancelBtn.hidden=true;retryBtn.hidden=false;retryBtn.onclick=()=>{el.remove();sendFile(file,seq);};try{await busSafeSend(JSON.stringify({t:'end',seq,cancelled:true}))}catch{}}outTransfers.delete(seq);}).catch(()=>{});}
