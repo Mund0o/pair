@@ -45,7 +45,7 @@ async function safeSend(data){const f=files;if(!f||f.readyState!=='open')throw n
 // Send over whichever file bus is active, applying backpressure so we don't
 // overflow the socket's send buffer. The relay socket uses bufferedAmount; the
 // WebRTC channel uses bufferedAmount + the bufferedamountlow event.
-const busDrains=new Map();function awaitBusDrain(bus){if(bus.bufferedAmount<=SEND_WINDOW*0.75)return Promise.resolve();if(!bus||bus!==fileBus())return Promise.resolve();let waiters=busDrains.get(bus);if(!waiters){waiters=new Set();busDrains.set(bus,waiters)}return new Promise(r=>{let done=false;const cleanup=()=>{if(done)return;done=true;clearInterval(timer);clearTimeout(timeout);try{bus.removeEventListener('bufferedamountlow',h)}catch{}};const h=()=>{if(bus.bufferedAmount<=SEND_WINDOW*0.75||bus!==fileBus()){cleanup();r()}};const timer=setInterval(h,200);const timeout=setTimeout(()=>{cleanup();r()},30000);try{bus.addEventListener('bufferedamountlow',h)}catch{};waiters.add(h)})}
+const busDrains=new Map();function awaitBusDrain(bus){if(bus.bufferedAmount<=SEND_WINDOW*0.75)return Promise.resolve();if(!bus||bus!==fileBus())return Promise.resolve();let waiters=busDrains.get(bus);if(!waiters){waiters=new Set();busDrains.set(bus,waiters)}return new Promise(r=>{let done=false;  const cleanup=()=>{if(done)return;done=true;clearInterval(timer);clearTimeout(timeout);try{bus.removeEventListener('bufferedamountlow',h)}catch{};waiters.delete(h)};const h=()=>{if(bus.bufferedAmount<=SEND_WINDOW*0.75||bus!==fileBus()){cleanup();r()}};const timer=setInterval(h,200);const timeout=setTimeout(()=>{cleanup();r()},30000);try{bus.addEventListener('bufferedamountlow',h)}catch{};waiters.add(h)})}
 async function busSafeSend(data){let retries=0;for(;;){const bus=fileBus();if(!bus)throw new Error('no file channel');
   // Proactively wait if the socket's send buffer is already near the window, so
   // we never overflow it (which would throw and abort the whole transfer).
@@ -218,7 +218,7 @@ async function processIncoming(t){const POOL=8;const queue=t.writeQueue;let acti
   let lastProgress=Date.now();let lastPeerSent=0,lastPctSent=-1;
   const watchdog=setInterval(()=>{if(Date.now()-lastProgress>STALL_TIMEOUT){const where=active>0?'draining decrypted chunks':'waiting for the next chunk ('+phase+')';t.stuck=new Error('Transfer stalled — stuck '+where+'. Received '+format(t.received)+' of '+format(t.size)+'. The connection may have dropped; try resending.')}},STALL_TIMEOUT/3);
   const touch=()=>{lastProgress=Date.now()};
-  const sendPeerProgress=pct=>{const now=Date.now();if((pct!==lastPctSent&&now-lastPeerSent>250)||now-lastPeerSent>500){lastPctSent=pct;lastPeerSent=now;try{safeSend(JSON.stringify({t:'progress',seq:t.seq,p:pct}))}catch{}}};
+  const sendPeerProgress=pct=>{const now=Date.now();if((pct!==lastPctSent&&now-lastPeerSent>250)||now-lastPeerSent>500){lastPctSent=pct;lastPeerSent=now;safeSend(JSON.stringify({t:'progress',seq:t.seq,p:pct})).catch(()=>{})}};
   try{
   while(!(t.lastSeen&&t.frames.length===0)){
     if(t.abort)return;

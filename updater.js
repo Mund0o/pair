@@ -111,6 +111,7 @@ async function checkOnce(feedUrl) {
 
 let pendingInstall = null;
 let timer = null;
+let initialTimer = null;
 let beforeQuitRegistered = false;
 let checking = false;
 
@@ -132,6 +133,7 @@ function startAutoUpdater(explicitFeed) {
   // sends a new feed (pair:setFeed). Clear any prior timer so we never stack
   // multiple 30-minute intervals (which would multiply downloads/installs) or
   // register duplicate before-quit listeners.
+  if (initialTimer) clearTimeout(initialTimer);
   if (timer) clearInterval(timer);
   if (!beforeQuitRegistered) {
     app.on('before-quit', () => {
@@ -141,7 +143,7 @@ function startAutoUpdater(explicitFeed) {
     beforeQuitRegistered = true;
   }
   // First check shortly after boot (let the window finish loading), then repeat.
-  setTimeout(() => checkOnce(feedUrl), 4000);
+  initialTimer = setTimeout(() => checkOnce(feedUrl), 4000);
   timer = setInterval(() => checkOnce(feedUrl), CHECK_INTERVAL);
 }
 

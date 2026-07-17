@@ -12,18 +12,21 @@ let writeStream = null;
 let writeFailed = null;
 
 let streamClosing = false;
+let closePromise = null;
 function closeStream() {
-  if (!writeStream || streamClosing) return Promise.resolve();
+  if (closePromise) return closePromise;
+  if (!writeStream) return Promise.resolve();
   streamClosing = true;
   const s = writeStream;
   writeStream = null;
-  return new Promise(resolve => {
-    const done = () => { streamClosing = false; resolve(); };
+  closePromise = new Promise(resolve => {
+    const done = () => { streamClosing = false; closePromise = null; resolve(); };
     s.once('close', done);
     s.once('error', done);
     s.destroy();
     setTimeout(done, 5000);
   });
+  return closePromise;
 }
 
 ipcMain.handle('pair:saveStart', async (_e, name) => {
@@ -63,14 +66,23 @@ ipcMain.handle('pair:saveWrite', async (_e, buf) => {
   const ok = writeStream.write(Buffer.from(buf));
   if (!ok && writeStream.writableLength > WRITE_HIGH_WATER) {
     await new Promise((resolve, reject) => {
+      const s = writeStream;
+      let settled = false;
+      const cleanup = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(wt);
+        try { s.removeListener('drain', onDrain); } catch {}
+        try { s.removeListener('error', onErr); } catch {}
+        try { s.removeListener('close', onClose); } catch {}
+      };
       const onDrain = () => { cleanup(); resolve(); };
       const onErr = err => { cleanup(); reject(err); };
-      const cleanup = () => {
-        writeStream.removeListener('drain', onDrain);
-        writeStream.removeListener('error', onErr);
-      };
-      writeStream.once('drain', onDrain);
-      writeStream.once('error', onErr);
+      const onClose = () => { cleanup(); resolve(); };
+      const wt = setTimeout(() => { cleanup(); resolve(); }, 30000);
+      s.once('drain', onDrain);
+      s.once('error', onErr);
+      s.once('close', onClose);
     });
   }
   return true;
@@ -80,7 +92,7 @@ ipcMain.handle('pair:saveEnd', () => new Promise((resolve, reject) => {
   if (!writeStream) return resolve(false);
   const s = writeStream;
   writeStream = null;
-  const to = setTimeout(() => resolve(false), 10000);
+  const to = setTimeout(() => { s.destroy(); resolve(false); }, 10000);
   s.once('finish', () => { clearTimeout(to); resolve(true); });
   s.once('error', err => { clearTimeout(to); reject(err); });
   s.end();
