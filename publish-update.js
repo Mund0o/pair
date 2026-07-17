@@ -6,10 +6,9 @@
 // ./dist8 (named by electron-builder as "<Product> Setup <version>.exe" and
 // "pair-p2p-<version>.tar.gz") into ./public, and writes ./public/latest.json.
 //
-// Both you and your friend must have their updater feed pointed at the same URL
-// (http://<your-public-ip>:8787). The signaling server (server.js) serves
-// ./public over HTTP on port 8787, so one forwarded port handles signaling AND
-// updates.
+// The auto-updater fetches ./public/latest.json from GitHub (raw repo URL,
+// configured in updater.js), so updates work with no personal server. The
+// signaling server (server.js) is only used for you and your friend to connect.
 //
 // Notes appear in the update banner. Pass them via the PAIR_NOTES env var, e.g.:
 //   PAIR_NOTES="Faster transfers and bug fixes" node publish-update.js

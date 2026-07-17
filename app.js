@@ -211,10 +211,8 @@ async function processIncoming(t){const POOL=8;const queue=t.writeQueue;let acti
 setStatus('Not connected');
 
 const savedServer=localStorage.getItem('pair.signalServer');const savedRoom=localStorage.getItem('pair.roomCode');if(savedServer)$('#signalServer').value=savedServer;if(savedRoom)$('#roomCode').value=savedRoom;['signalServer','roomCode'].forEach(id=>$('#'+id).addEventListener('input',()=>localStorage.setItem('pair.'+(id==='signalServer'?'signalServer':'roomCode'),$('#'+id).value.trim())));
-// Point auto-update at the SAME host the user configured for signaling (the feed
-// lives on that host's :8787). Convert ws:// -> http:// so the HTTP manifest
-// fetch works. This makes remote updates work with zero extra setup.
-if(window.pairEnv&&window.pairEnv.setFeed){try{let s=localStorage.getItem('pair.signalServer')||'';s=s.trim();if(s){s=s.replace(/^wss?:\/\//i,'http://');if(!/\/$/.test(s))s+='/';window.pairEnv.setFeed(s.replace(/\/$/,'')+'');}}catch{}}
+  // Auto-update pulls latest.json directly from GitHub (configured in updater.js),
+  // independent of the signaling server. No action needed here.
 
 let signaling;
 async function automaticPair(kind){
@@ -238,7 +236,7 @@ function disconnectRoom(){if(chat)chat.onmessage=null,chat.close();if(files)file
   // and the send loop will abort cleanly.
   if(drainWait){const r=drainWait;drainWait=null;try{r()}catch{}}
   busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();
-  endCall(true);sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
+  sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
   acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 $('#leaveRoom').onclick=()=>disconnectRoom();
 // Clear-list button: tears down any in-flight transfers and empties the list.

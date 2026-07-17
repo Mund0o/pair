@@ -11,11 +11,11 @@ const os = require('os');
 const https = require('https');
 const http = require('http');
 
-// Where update files live. Read once from disk if present (~/.pair-update-url),
-// otherwise this fallback is used. Set this to your server, e.g.
-//   http://203.0.113.5:8787
-// Host the installer, the .tar.gz, and latest.json at this URL.
-const DEFAULT_FEED = 'http://localhost:8787';
+// Where the update manifest (latest.json) lives. We host it on GitHub — the
+// installer + tarball are public release assets and latest.json always points
+// at them, so updates work with zero reliance on a personal server. Override
+// with PAIR_FEED env or ~/.pair-update-url if you ever self-host instead.
+const DEFAULT_FEED = 'https://raw.githubusercontent.com/Mund0o/pair/master/public';
 const CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
 function readFeedUrl() {
