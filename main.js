@@ -113,7 +113,7 @@ ipcMain.on('pair:installUpdate', () => performInstall());
 // lets auto-update work for a remote peer without manual config: they set the
 // signaling server once, and updates use that same host. Start (or restart) the
 // check loop with that feed as soon as we receive it.
-ipcMain.on('pair:setFeed', (_e, url) => { startAutoUpdater(url); });
+ipcMain.on('pair:setFeed', (_e, url) => { startAutoUpdater(String(url).replace(/^ws:/,'http:')); });
 
 app.on('window-all-closed', () => closeStream());
 

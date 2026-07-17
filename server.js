@@ -41,7 +41,6 @@ function buildLandingPage(manifest) {
   const notes = manifest && manifest.notes ? manifest.notes : '';
   const winUrl = manifest && manifest.winUrl ? manifest.winUrl : '';
   const linuxUrl = manifest && manifest.linuxUrl ? manifest.linuxUrl : '';
-  const initial = platformForRequest({ headers: {} }) === 'linux' ? 'linux' : 'win';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -137,7 +136,7 @@ const httpServer = http.createServer((req, res) => {
     }
     const ext = path.extname(file).toLowerCase();
     res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
-    fs.createReadStream(file).pipe(res);
+    const rs=fs.createReadStream(file);rs.on('error',()=>{try{res.end()}catch{}});rs.pipe(res);
   } catch (e) {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('Error');

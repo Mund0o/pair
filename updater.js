@@ -62,14 +62,17 @@ function fetchUrl(url, { binary = false } = {}, depth = 0) {
 function downloadInstaller(url, dest) {
   return fetchUrl(url, { binary: true }).then(buf => {
     if (!buf || !buf.length) throw new Error('downloaded file is empty');
-    fs.writeFileSync(dest, buf);
-    return dest;
+    return new Promise((resolve, reject) => {
+      fs.writeFile(dest, buf, err => err ? reject(err) : resolve(dest));
+    });
   });
 }
 
 // One check cycle. Resolves when done; never throws (logs errors instead).
 async function checkOnce(feedUrl) {
-  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  if (checking) return;
+  checking = true;
+  try { const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
   let manifest;
   try {
     manifest = JSON.parse(await fetchUrl(feedUrl.replace(/\/$/, '') + '/latest.json'));
@@ -104,11 +107,12 @@ async function checkOnce(feedUrl) {
       url: manifest.linuxUrl, stage: 'link'
     });
   }
-}
+} finally { checking = false; } }
 
 let pendingInstall = null;
 let timer = null;
 let beforeQuitRegistered = false;
+let checking = false;
 
 // Called by the renderer (Windows) when the user clicks "Restart to update".
 function performInstall() {
@@ -117,7 +121,7 @@ function performInstall() {
   pendingInstall = null;
   // Opening the NSIS installer while the app is still running causes file-in-use
   // errors, so quit first. NSIS then runs and replaces the app.
-  shell.openPath(p).finally(() => app.quit());
+  shell.openPath(p).then(() => app.quit(), () => { pendingInstall = p; });
 }
 
 function startAutoUpdater(explicitFeed) {
