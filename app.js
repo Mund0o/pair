@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$(
 let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promise.resolve();let CHUNK=1024*1024;const MAX=120*1024**3;
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
-let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null;
+let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0;
 // Direct handle to the audio transceiver created in setupPeer, so startCall can
 // always reuse it (never add a second m-line). Nulled on disconnect/teardown.
 let audioTransceiver=null;
@@ -333,30 +333,18 @@ refreshClearBtn();
 // Start/stop a two-way audio call over the existing peer connection. The audio
 // transceiver was negotiated during setup, so we only attach the mic here.
 async function startCall(){
-  // Don't start if a call is already active or there's no peer connection. We use
-  // replaceTrack (not addTrack), so attaching the mic never triggers a
-  // renegotiation — meaning we don't need to wait for connectionState==='connected'
-  // and risk silently no-op'ing a valid click. If the connection isn't ready yet,
-  // the track simply starts flowing as soon as DTLS completes.
-  if(callActive||!pc)return;
+  // Guard against re-entry: a second click during getUserMedia or replaceTrack
+  // would leak a MediaStream and drive concurrent instances through the state
+  // machine. The flag is cleared in the finally block below.
+  if(callActive||!pc||callStarting)return;
+  callStarting=true;
   friendLeftNotified=false;
+  const gen=callGen;
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    // The room may have been left (or the call ended) while the permission prompt
-    // was pending. If so, discard the freshly granted mic and bail — otherwise the
-    // stream leaks (mic stays on) and would attach to a dead connection.
     if(!pc){localStream.getTracks().forEach(t=>t.stop());localStream=null;return}
-    // The audio transceiver was already negotiated as sendrecv during connect.
-    // Reuse its existing sender via replaceTrack so we DON'T add a second m-line
-    // (which would require an unhandled renegotiation). If no sender exists yet,
-    // attach the track normally.
     const track=localStream.getAudioTracks()[0];
-    // Find the correct sender: prefer a transceiver that was actually negotiated
-    // (has a mid, meaning it's part of the SDP). audioTransceiver is updated by
-    // ontrack to always point at the real one, but we also check mid as a safety
-    // net in case ontrack hasn't fired yet. NEVER fall through to addTransceiver
-    // — that would create a second m-line and trigger unhandled renegotiation.
     const tr=audioTransceiver&&audioTransceiver.mid?audioTransceiver
       :pc.getTransceivers().find(t=>t.mid&&t.kind==='audio')
       ||audioTransceiver
@@ -364,26 +352,23 @@ async function startCall(){
     const sender=tr?tr.sender:null;
     if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
-    // Re-trigger remote audio playback now that we're in a gesture (button click).
-    // On Linux/PipeWire the initial ontrack play() often gets blocked by autoplay
-    // policy and never retried because replaceTrack doesn't fire ontrack again.
-    // Also re-acquire srcObject from the transceiver in case endCall previously
-    // cleared it (e.g. on a temporary ICE drop).
-    if(!remoteAudio.srcObject){const tr=pc.getTransceivers().find(t=>t.mid&&t.kind==='audio');if(tr&&tr.receiver.track){try{remoteAudio.srcObject=new MediaStream([tr.receiver.track])}catch{}}}
+    // endCall may have run while we were awaiting getUserMedia or replaceTrack
+    // (e.g. user clicked Stop Voice or the connection dropped). The generation
+    // counter callGen is incremented by every endCall call. If it changed, bail.
+    if(gen!==callGen||!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
     try{remoteAudio.muted=false;remoteAudio.play()}catch{}
-    // Connect a permanent AudioContext sink as a robust fallback against autoplay
-    // restrictions. AudioContext can be resumed on gesture reliably across Linux.
     setupPermanentAudioSink();
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
-    // Play the calling jingle locally and let the friend hear a ring too.
     playSound('ring');try{send({t:'call-ring'})}catch{}
     callStatus.textContent='Voice live';callStatus.className='call-status live';
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0')},1000);
-  }catch(e){try{send({t:'call-end'})}catch{};endCall(true);const m=String(e?.message||e||'');if(/not\s*found/i.test(m))callStatus.textContent='No mic found — check your microphone connection';else if(/permission|denied|not\s*allowed/i.test(m))callStatus.textContent='Mic access blocked — allow microphone in browser/app settings';else callStatus.textContent='Mic error — '+(e?.message||e);callStatus.className='call-status';}
+  }catch(e){try{send({t:'call-end'})}catch{};endCall(true);const m=String(e?.message||e||'');if(/not\s*found/i.test(m))callStatus.textContent='No mic found — check your microphone connection';else if(/permission|denied|not\s*allowed/i.test(m))callStatus.textContent='Mic access blocked — allow microphone in browser/app settings';else callStatus.textContent='Mic error — '+(e?.message||e);callStatus.className='call-status';
+  }finally{callStarting=false}
 }
 // Tear down the call and release the mic. `silent` skips UI churn when called
 // from a disconnect.
 function endCall(silent){
+  callGen++;
   if(callTimerId){clearInterval(callTimerId);callTimerId=null}
   callTimerEl.textContent='';
   // Stopping the local track silences our outgoing audio WITHOUT touching the
