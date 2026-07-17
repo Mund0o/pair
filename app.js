@@ -4,12 +4,21 @@ let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promis
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
 let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null;
+// Per-connection sound flags so the chimes don't double/triple: chat+files both
+// report "connected", and connection-loss/voice-leave can each fire a leave tone.
+let connectSoundDone=false,friendLeftNotified=false;
 const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio');
 // Lightweight synth sound effects via Web Audio (no asset files needed). Each
 // call lazily creates/resumes the AudioContext so it works after a user gesture
 // and stays quiet until then.
 let audioCtx=null;
 function sfxCtx(){if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)()}catch{return null}}if(audioCtx.state==='suspended'){try{audioCtx.resume()}catch{}}return audioCtx}
+// Browsers keep a freshly created AudioContext 'suspended' until a user gesture.
+// The connect chime fires from async channel-open callbacks (outside a gesture),
+// so pre-warm/resume the context on the first interaction anywhere on the page.
+function warmAudio(){const c=sfxCtx();if(c&&c.state==='suspended'){try{c.resume()}catch{}}}
+document.addEventListener('pointerdown',warmAudio,{once:true});
+document.addEventListener('keydown',warmAudio,{once:true});
 function tone(ctx,freq,start,dur,type='sine',gain=0.18){const o=ctx.createOscillator(),g=ctx.createGain();o.type=type;o.frequency.setValueAtTime(freq,ctx.currentTime+start);g.gain.setValueAtTime(0,ctx.currentTime+start);g.gain.linearRampToValueAtTime(gain,ctx.currentTime+start+0.02);g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+start+dur);o.connect(g).connect(ctx.destination);o.start(ctx.currentTime+start);o.stop(ctx.currentTime+start+dur+0.02)}
 function playSound(kind){
   const ctx=sfxCtx();if(!ctx)return;
@@ -44,7 +53,7 @@ let sendAbort=new Map(),fileSeq=0;
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
 const enc=new TextEncoder(),dec=new TextDecoder();
-function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;playSound('connect')}else{[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
+function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
 function cleanSignal(s){return JSON.parse(atob(s.trim()))}function makeSignal(o){return btoa(JSON.stringify(o))}
 async function keyPair(){return crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveKey'])}async function exportPub(k){return crypto.subtle.exportKey('jwk',k)}async function importPub(j){return crypto.subtle.importKey('jwk',j,{name:'ECDH',namedCurve:'P-256'},false,[])}
 async function derive(local,remote){const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);const fp=await crypto.subtle.digest('SHA-256',bits);$('#fingerprint').textContent='Session key fingerprint: '+[...new Uint8Array(fp)].slice(0,4).map(b=>b.toString(16).padStart(2,'0')).join('');sharedKey=await crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt']);}
@@ -52,16 +61,16 @@ async function seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));c
 async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(o.iv)},sharedKey,new Uint8Array(o.data)))}
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
 function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}function addMessage(text,mine=false){$('.empty')?.remove();const el=document.createElement('div');el.className='message '+(mine?'mine':'');el.innerHTML='<div class="bubble"></div><div class="meta">'+(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+'</div>';el.querySelector('.bubble').textContent=text;messages.append(el);messages.scrollTop=messages.scrollHeight}
-function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));else if(o.t==='call-ring')playSound('ring');else if(o.t==='call-end'){playSound('leave');callStatus.textContent='Friend left the call';callStatus.className='call-status'}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e))};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
+function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));else if(o.t==='call-ring')playSound('ring');else if(o.t==='call-end'){if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e))};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 async function busSend(data){const bus=fileBus();if(!bus)throw new Error('no file channel');if(typeof data==='string')bus.send(data);else bus.send(data)}
-function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);playSound('leave')}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // Negotiate a bidirectional audio transceiver up front so voice works without
   // a renegotiation round-trip once the call starts. No track is attached until
   // the user clicks Start voice, keeping the mic off until then.
   try{const t=pc.addTransceiver('audio',{direction:'sendrecv'});t.setDirection('sendrecv')}catch{}
-  pc.ontrack=e=>{if(e.track.kind==='audio'){try{remoteAudio.srcObject=e.streams[0]||new MediaStream([e.track]);remoteAudio.muted=false;e.track.onended=()=>{playSound('leave');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const tryPlay=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{/* autoplay may reject once; retry shortly after a gesture */setTimeout(tryPlay,400)})};tryPlay()}catch{}}};
+  pc.ontrack=e=>{if(e.track.kind==='audio'){try{remoteAudio.srcObject=e.streams[0]||new MediaStream([e.track]);remoteAudio.muted=false;    e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const tryPlay=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{/* autoplay may reject once; retry shortly after a gesture */setTimeout(tryPlay,400)})};tryPlay()}catch{}}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -230,7 +239,7 @@ function disconnectRoom(){if(chat)chat.onmessage=null,chat.close();if(files)file
   if(drainWait){const r=drainWait;drainWait=null;try{r()}catch{}}
   busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();
   endCall(true);sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
-  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
+  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 $('#leaveRoom').onclick=()=>disconnectRoom();
 // Clear-list button: tears down any in-flight transfers and empties the list.
 const clearBtn=$('#clearTransfers');
@@ -261,6 +270,7 @@ async function startCall(){
   // and risk silently no-op'ing a valid click. If the connection isn't ready yet,
   // the track simply starts flowing as soon as DTLS completes.
   if(callActive||!pc)return;
+  friendLeftNotified=false;
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
@@ -270,10 +280,13 @@ async function startCall(){
     // attach the track normally.
     const track=localStream.getAudioTracks()[0];
     // The audio transceiver was negotiated as sendrecv during connect, so it
-    // always has a sender. Reuse it via replaceTrack (even if its previous track
-    // was stopped). Never addTrack — that would create a second m-line and an
-    // unhandled renegotiation.
-    const sender=pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
+    // always exists. Reuse its sender via replaceTrack — even if a previous call
+    // left it with a null track (endCall does replaceTrack(null)). Match by the
+    // transceiver's audio kind, NOT by s.track, because a stopped sender has no
+    // track and would otherwise fall through to addTransceiver and create a
+    // second m-line (an unhandled renegotiation that breaks the next call).
+    const audioTransceiver=pc.getTransceivers().find(t=>t.receiver&&t.receiver.track&&t.receiver.track.kind==='audio');
+    const sender=audioTransceiver?audioTransceiver.sender:pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
     if(sender){try{sender.replaceTrack(track)}catch{}}else{const t=pc.addTransceiver('audio',{direction:'sendrecv'});try{t.sender.replaceTrack(track)}catch{}}
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
     // Play the calling jingle locally and let the friend hear a ring too.
