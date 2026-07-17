@@ -1,0 +1,122 @@
+const { app, BrowserWindow, session, dialog, ipcMain } = require('electron');
+const path = require('path');
+const fs = require('fs');
+require('./server.js');
+
+// --- Incoming-file disk streaming (single active write stream) ---
+// The renderer is sandboxed, so all fs access happens here. `write` resolves
+// only when the OS accepts the chunk or 'drain' fires — that backpressure
+// flows back through the renderer and WebRTC to the sender.
+let writeStream = null;
+let writeFailed = null;
+
+function closeStream() {
+  if (!writeStream) return Promise.resolve();
+  const s = writeStream;
+  writeStream = null;
+  return new Promise(resolve => {
+    s.once('close', resolve);
+    s.once('error', resolve);
+    s.destroy();
+  });
+}
+
+ipcMain.handle('pair:saveStart', async (_e, name) => {
+  await closeStream();
+  writeFailed = null;
+  const result = await dialog.showSaveDialog({
+    title: 'Save incoming file',
+    defaultPath: name || 'incoming',
+    buttonLabel: 'Save'
+  });
+  if (result.canceled || !result.filePath) return { ok: false };
+  writeStream = fs.createWriteStream(result.filePath);
+  writeStream.on('error', err => { writeFailed = err; });
+  return { ok: true, path: result.filePath };
+});
+
+// How much decrypted data we'll buffer in the Node stream before pausing the
+// renderer. Large enough that the network never stalls waiting on a slow disk,
+// small enough to bound memory for very large files.
+const WRITE_HIGH_WATER = 256 * 1024 * 1024;
+
+ipcMain.handle('pair:saveWrite', async (_e, buf) => {
+  if (!writeStream) throw new Error('no open stream');
+  if (writeFailed) throw writeFailed;
+  // Write without awaiting each drain. Node's Writable buffers internally; we
+  // only back-pressure the renderer when our own buffer exceeds WRITE_HIGH_WATER
+  // (i.e. the disk genuinely can't keep up). This removes the per-chunk IPC
+  // round-trip latency that otherwise caps receive throughput.
+  const ok = writeStream.write(Buffer.from(buf));
+  if (!ok && writeStream.writableLength > WRITE_HIGH_WATER) {
+    await new Promise((resolve, reject) => {
+      const onDrain = () => { cleanup(); resolve(); };
+      const onErr = err => { cleanup(); reject(err); };
+      const cleanup = () => {
+        writeStream.removeListener('drain', onDrain);
+        writeStream.removeListener('error', onErr);
+      };
+      writeStream.once('drain', onDrain);
+      writeStream.once('error', onErr);
+    });
+  }
+  return true;
+});
+
+ipcMain.handle('pair:saveEnd', () => new Promise((resolve, reject) => {
+  if (!writeStream) return resolve(false);
+  const s = writeStream;
+  writeStream = null;
+  s.once('finish', () => resolve(true));
+  s.once('error', err => reject(err));
+  s.end();
+}));
+
+ipcMain.handle('pair:saveCancel', () => closeStream().then(() => true));
+
+// Auto-update: start the check loop and listen for the renderer's request to
+// install a downloaded Windows update.
+const { startAutoUpdater, performInstall } = require('./updater');
+ipcMain.on('pair:installUpdate', () => performInstall());
+// The renderer tells us the update feed (same host it uses for signaling). This
+// lets auto-update work for a remote peer without manual config: they set the
+// signaling server once, and updates use that same host. Start (or restart) the
+// check loop with that feed as soon as we receive it.
+ipcMain.on('pair:setFeed', (_e, url) => { startAutoUpdater(url); });
+
+app.on('window-all-closed', () => closeStream());
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 860,
+    minHeight: 680,
+    backgroundColor: '#f4f1eb',
+    title: 'Pair — private P2P chat',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  });
+
+  win.loadFile(path.join(__dirname, 'index.html'));
+}
+
+app.whenReady().then(() => {
+  // Needed for the browser File System Access API used to stream large downloads.
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'media' || permission === 'notifications' || permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+  });
+  createWindow();
+  startAutoUpdater();
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pair — private P2P chat</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <div id="updateBanner" class="update-banner" hidden>
+        <div class="update-text"><strong id="updateTitle"></strong><span id="updateNotes" class="update-notes"></span></div>
+        <div class="update-actions"><a id="updateLink" class="text-button" hidden>Download</a><button id="updateRestart" class="primary" hidden>Restart to update</button><button id="updateDismiss" class="text-button">Dismiss</button></div>
+      </div>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">TWO-PERSON / DIRECT</p>
+          <h1>Pair<span>.</span></h1>
+        </div>
+        <div class="connection"><i id="statusDot"></i><span id="statusText">Not connected</span></div>
+      </header>
+
+      <section class="pair-card card">
+        <div class="section-heading"><div><p class="eyebrow">01 / CONNECT</p><h2>Start a private room</h2></div><span class="lock">E2EE</span></div>
+        <p class="muted">Use the room code below. The host starts the room; the friend joins it. Your chat and files stay peer to peer.</p>
+        <div class="auto-pair primary-pair">
+          <div class="auto-title"><div><p class="eyebrow">RECOMMENDED</p><h3>Room-code pairing</h3></div><span class="status-note">NO COPY / PASTE</span></div>
+          <div class="auto-grid">
+            <div class="auto-field"><label for="signalServer">Signaling address</label><input id="signalServer" value="ws://localhost:8787" aria-label="Signaling server address" /></div>
+            <div class="auto-field"><label for="roomCode">Room code</label><input id="roomCode" value="PAIR" aria-label="Room code" /></div>
+            <button id="hostRoom" class="primary">Host room</button><button id="joinRoom">Join room</button><button id="leaveRoom" hidden>Leave room</button>
+          </div>
+          <p class="hint">On your PC use <code>ws://localhost:8787</code>. Your friend uses <code>ws://YOUR_PUBLIC_IP:8787</code>. Both use the same room code. These settings are saved on this device.</p>
+          <p id="pairHint" class="pair-hint">Ready to connect.</p>
+        </div>
+        <details class="manual-pair"><summary>Advanced: manual signal pairing</summary><p class="hint">This is the original fallback. It requires copying large WebRTC signals between devices and is usually unnecessary.</p><div class="pair-grid"><div><label for="signalOut">Your signal</label><textarea id="signalOut" readonly placeholder="Create an offer or answer…"></textarea><div class="button-row"><button id="createOffer">Create offer</button><button id="createAnswer">Create answer</button></div></div><div><label for="signalIn">Friend’s signal</label><textarea id="signalIn" placeholder="Paste your friend’s signal…"></textarea><button id="applySignal" class="wide">Apply signal</button></div></div><button id="copySignal" class="text-button">Copy generated signal</button></details>
+      </section>
+
+      <section class="workspace">
+        <div class="chat card">
+          <div class="section-heading"><div><p class="eyebrow">02 / CHAT</p><h2>Private room</h2></div><span class="pill">DIRECT</span></div>
+          <div id="messages" class="messages"><div class="empty"><span>✦</span><p>Messages travel directly between your devices.</p></div></div>
+          <form id="messageForm" class="composer"><input id="messageInput" autocomplete="off" placeholder="Write a message…" disabled /><button class="send" disabled>Send</button></form>
+        </div>
+        <aside class="files card">
+          <div class="section-heading"><div><p class="eyebrow">03 / TRANSFER</p><h2>Files</h2></div><div class="heading-actions"><span class="limit">UP TO 120 GB</span><button id="clearTransfers" class="text-button" hidden>Clear list</button></div></div>
+          <input id="fileInput" type="file" hidden multiple disabled />
+          <button id="chooseFiles" class="dropzone" disabled><span class="upload-icon">↑</span><strong>Choose files</strong><small>Encrypted locally, sent peer to peer</small></button>
+          <div id="transfers" class="transfers"><p class="muted small">No transfers yet.</p></div>
+          <p class="footnote">Files are encrypted before they leave your device. Keep this tab open while sending or receiving.</p>
+        </aside>
+      </section>
+      <footer><span>WebRTC data channel · AES-GCM payload encryption</span><span id="fingerprint">Keys generated on connect</span></footer>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

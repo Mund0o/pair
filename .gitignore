@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist7/
+dist8/
+dist17/
+dist18/
+dist19/
+electron-dist/
+.zcode/
+*.exe
+*.exe.blockmap
+*.tar.gz
+*.zip
+Pair-linux-source.zip
+.DS_Store
