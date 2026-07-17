@@ -28,7 +28,7 @@ let sendAbort=new Map(),fileSeq=0;
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
 const enc=new TextEncoder(),dec=new TextDecoder();
-function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false}else{if(text==='Not connected'){[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
+function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false}else{[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
 function cleanSignal(s){return JSON.parse(atob(s.trim()))}function makeSignal(o){return btoa(JSON.stringify(o))}
 async function keyPair(){return crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveKey'])}async function exportPub(k){return crypto.subtle.exportKey('jwk',k)}async function importPub(j){return crypto.subtle.importKey('jwk',j,{name:'ECDH',namedCurve:'P-256'},false,[])}
 async function derive(local,remote){const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);const fp=await crypto.subtle.digest('SHA-256',bits);$('#fingerprint').textContent='Session key fingerprint: '+[...new Uint8Array(fp)].slice(0,4).map(b=>b.toString(16).padStart(2,'0')).join('');sharedKey=await crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt']);}
@@ -234,10 +234,18 @@ async function startCall(){
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    // The audio transceiver was already negotiated as sendrecv during connect,
-    // so just attaching the mic track activates the existing m-line — no
-    // renegotiation needed.
-    localStream.getAudioTracks().forEach(t=>pc.addTrack(t,localStream));
+    // The audio transceiver was already negotiated as sendrecv during connect.
+    // Reuse its existing sender via replaceTrack so we DON'T add a second m-line
+    // (which would require an unhandled renegotiation). If no sender exists yet,
+    // attach the track normally.
+    const track=localStream.getAudioTracks()[0];
+    // Reuse the existing audio sender (from the negotiated transceiver) via
+    // replaceTrack, even if its previous track was stopped. This keeps the
+    // single negotiated m-line and avoids an unhandled renegotiation. Only fall
+    // back to addTrack if no audio sender exists at all.
+    const sender=pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
+    if(sender){try{sender.replaceTrack(track);}catch{try{pc.addTrack(track,localStream)}catch{}}}
+    else pc.addTrack(track,localStream);
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
     callStatus.textContent='Voice live';callStatus.className='call-status live';
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0')},1000);
@@ -248,8 +256,10 @@ async function startCall(){
 function endCall(silent){
   if(callTimerId){clearInterval(callTimerId);callTimerId=null}
   callTimerEl.textContent='';
+  // Stopping the local track silences our outgoing audio WITHOUT touching the
+  // negotiated transceiver, so no renegotiation is triggered (the app doesn't
+  // handle mid-call renegotiation). The peer's receiver just gets silence.
   if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}
-  if(pc){for(const s of pc.getSenders()){if(s.track&&s.track.kind==='audio'){try{pc.removeTrack(s)}catch{}}}}
   callActive=false;micMuted=false;
   callBtn.textContent='🎙 Start voice';muteBtn.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
   if(!silent){callBtn.disabled=!pc;}
@@ -266,5 +276,3 @@ muteBtn.onclick=toggleMute;
 // Auto-update banner. Only wires up when running inside the Pair app
 // (window.pairEnv is exposed by preload.js). Browsers ignore this block.
 if(window.pairEnv&&window.pairEnv.onUpdate){const banner=$('#updateBanner'),title=$('#updateTitle'),notes=$('#updateNotes'),link=$('#updateLink'),restart=$('#updateRestart');$('#updateDismiss').onclick=()=>{banner.hidden=true};window.pairEnv.onUpdate(info=>{banner.hidden=false;title.textContent='Update available — version '+info.version;if(info.notes)notes.textContent=info.notes;else notes.textContent='';if(info.stage==='link'){link.hidden=false;link.href=info.url;link.target='_blank'}else link.hidden=true;if(info.stage==='ready'){restart.hidden=false;restart.onclick=()=>window.pairEnv.restartForUpdate()}else restart.hidden=true})}
-
-}
