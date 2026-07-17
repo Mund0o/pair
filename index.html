@@ -39,8 +39,15 @@
       <section class="workspace">
         <div class="chat card">
           <div class="section-heading"><div><p class="eyebrow">02 / CHAT</p><h2>Private room</h2></div><span class="pill">DIRECT</span></div>
+          <div class="voice-bar">
+            <button id="callBtn" class="text-button" disabled>🎙 Start voice</button>
+            <button id="muteBtn" class="text-button" hidden>🔇 Mute mic</button>
+            <span id="callStatus" class="call-status">Voice off</span>
+            <span id="callTimer" class="call-timer"></span>
+          </div>
           <div id="messages" class="messages"><div class="empty"><span>✦</span><p>Messages travel directly between your devices.</p></div></div>
           <form id="messageForm" class="composer"><input id="messageInput" autocomplete="off" placeholder="Write a message…" disabled /><button class="send" disabled>Send</button></form>
+          <audio id="remoteAudio" autoplay></audio>
         </div>
         <aside class="files card">
           <div class="section-heading"><div><p class="eyebrow">03 / TRANSFER</p><h2>Files</h2></div><div class="heading-actions"><span class="limit">UP TO 120 GB</span><button id="clearTransfers" class="text-button" hidden>Clear list</button></div></div>

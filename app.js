@@ -1,6 +1,10 @@
 /* Pair: manual-signaling, two-person P2P chat with application-level E2EE. */
 const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$('#signalIn'),statusText=$('#statusText'),statusDot=$('#statusDot'),messages=$('#messages'),messageForm=$('#messageForm'),messageInput=$('#messageInput'),fileInput=$('#fileInput'),chooseFiles=$('#chooseFiles'),transfers=$('#transfers'),pairHint=$('#pairHint');
 let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promise.resolve();let CHUNK=1024*1024;const MAX=120*1024**3;
+// Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
+// encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
+let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null;
+const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio');
 // Separate WebSocket used to relay file bytes (E2EE) between peers. Reuses the
 // same signaling host/room, so no extra port forwarding. Binary frames are
 // relayed verbatim; this saturates a LAN far better than WebRTC SCTP.
@@ -24,7 +28,7 @@ let sendAbort=new Map(),fileSeq=0;
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
 const enc=new TextEncoder(),dec=new TextDecoder();
-function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true}else{if(text==='Not connected'){[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true}}}
+function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false}else{if(text==='Not connected'){[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
 function cleanSignal(s){return JSON.parse(atob(s.trim()))}function makeSignal(o){return btoa(JSON.stringify(o))}
 async function keyPair(){return crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveKey'])}async function exportPub(k){return crypto.subtle.exportKey('jwk',k)}async function importPub(j){return crypto.subtle.importKey('jwk',j,{name:'ECDH',namedCurve:'P-256'},false,[])}
 async function derive(local,remote){const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);const fp=await crypto.subtle.digest('SHA-256',bits);$('#fingerprint').textContent='Session key fingerprint: '+[...new Uint8Array(fp)].slice(0,4).map(b=>b.toString(16).padStart(2,'0')).join('');sharedKey=await crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt']);}
@@ -36,7 +40,13 @@ function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataCh
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 async function busSend(data){const bus=fileBus();if(!bus)throw new Error('no file channel');if(typeof data==='string')bus.send(data);else bus.send(data)}
-function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pc.onicecandidate=()=>{};pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState))setStatus(pc.connectionState)};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()}}
+function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pc.onicecandidate=()=>{};pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState))setStatus(pc.connectionState)};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+  // Negotiate a bidirectional audio transceiver up front so voice works without
+  // a renegotiation round-trip once the call starts. No track is attached until
+  // the user clicks Start voice, keeping the mic off until then.
+  try{const t=pc.addTransceiver('audio',{direction:'sendrecv'});t.setDirection('sendrecv')}catch{}
+  pc.ontrack=e=>{if(e.track.kind==='audio'){remoteAudio.srcObject=e.streams[0]||new MediaStream([e.track]);try{remoteAudio.play().catch(()=>{})}catch{}}};
+}
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
 $('#createAnswer').onclick=async()=>{try{if(pc)pc.close();role='answer';const remote=cleanSignal(signalIn.value);setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});await derive(kp,remote.pub);await pc.setLocalDescription(await pc.createAnswer());await waitIce();signalOut.value=makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this answer back to the person who made the offer.'}catch(e){pairHint.textContent='Could not create answer: '+e.message}};
@@ -194,7 +204,7 @@ async function automaticPair(kind){
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{};streamWs.onclose=()=>{};}catch{streamWs=null}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
-function disconnectRoom(){if(chat)chat.onmessage=null,chat.close();if(files)files.onmessage=null,files.close();if(pc)pc.close();pc=chat=files=null;if(signaling){try{signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;drainWait=null;sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
+function disconnectRoom(){if(chat)chat.onmessage=null,chat.close();if(files)files.onmessage=null,files.close();if(pc)pc.close();pc=chat=files=null;if(signaling){try{signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;drainWait=null;endCall(true);sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
   acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();busDrains.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 $('#leaveRoom').onclick=()=>disconnectRoom();
 // Clear-list button: tears down any in-flight transfers and empties the list.
@@ -216,6 +226,45 @@ const _origPrepend=transfers.prepend.bind(transfers);
 transfers.prepend=el=>{_origPrepend(el);refreshClearBtn();return el;};
 refreshClearBtn();
 
+// --- Voice call ---------------------------------------------------------------
+// Start/stop a two-way audio call over the existing peer connection. The audio
+// transceiver was negotiated during setup, so we only attach the mic here.
+async function startCall(){
+  if(callActive||!pc)return;
+  try{
+    callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
+    localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    // The audio transceiver was already negotiated as sendrecv during connect,
+    // so just attaching the mic track activates the existing m-line — no
+    // renegotiation needed.
+    localStream.getAudioTracks().forEach(t=>pc.addTrack(t,localStream));
+    callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
+    callStatus.textContent='Voice live';callStatus.className='call-status live';
+    callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0')},1000);
+  }catch(e){endCall(true);callStatus.textContent='Mic denied — check permissions';callStatus.className='call-status';}
+}
+// Tear down the call and release the mic. `silent` skips UI churn when called
+// from a disconnect.
+function endCall(silent){
+  if(callTimerId){clearInterval(callTimerId);callTimerId=null}
+  callTimerEl.textContent='';
+  if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}
+  if(pc){for(const s of pc.getSenders()){if(s.track&&s.track.kind==='audio'){try{pc.removeTrack(s)}catch{}}}}
+  callActive=false;micMuted=false;
+  callBtn.textContent='🎙 Start voice';muteBtn.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
+  if(!silent){callBtn.disabled=!pc;}
+}
+function toggleMute(){
+  if(!localStream)return;
+  micMuted=!micMuted;
+  localStream.getAudioTracks().forEach(t=>t.enabled=!micMuted);
+  muteBtn.textContent=micMuted?'🎙 Unmute mic':'🔇 Mute mic';
+}
+callBtn.onclick=()=>{if(callActive)endCall(false);else startCall()};
+muteBtn.onclick=toggleMute;
+
 // Auto-update banner. Only wires up when running inside the Pair app
 // (window.pairEnv is exposed by preload.js). Browsers ignore this block.
 if(window.pairEnv&&window.pairEnv.onUpdate){const banner=$('#updateBanner'),title=$('#updateTitle'),notes=$('#updateNotes'),link=$('#updateLink'),restart=$('#updateRestart');$('#updateDismiss').onclick=()=>{banner.hidden=true};window.pairEnv.onUpdate(info=>{banner.hidden=false;title.textContent='Update available — version '+info.version;if(info.notes)notes.textContent=info.notes;else notes.textContent='';if(info.stage==='link'){link.hidden=false;link.href=info.url;link.target='_blank'}else link.hidden=true;if(info.stage==='ready'){restart.hidden=false;restart.onclick=()=>window.pairEnv.restartForUpdate()}else restart.hidden=true})}
+
+}
