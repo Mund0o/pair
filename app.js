@@ -1,5 +1,5 @@
 /* Pair: manual-signaling, two-person P2P chat with application-level E2EE. */
-const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$('#signalIn'),statusText=$('#statusText'),statusDot=$('#statusDot'),messages=$('#messages'),messageForm=$('#messageForm'),messageInput=$('#messageInput'),fileInput=$('#fileInput'),chooseFiles=$('#chooseFiles'),transfers=$('#transfers'),pairHint=$('#pairHint');
+const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$('#signalIn'),statusText=$('#statusText'),messages=$('#messages'),messageForm=$('#messageForm'),messageInput=$('#messageInput'),fileInput=$('#fileInput'),chooseFiles=$('#chooseFiles'),transfers=$('#transfers'),pairHint=$('#pairHint');
 let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promise.resolve();let CHUNK=1024*1024;const MAX=120*1024**3;
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
@@ -158,6 +158,7 @@ async function sendFile(file,retryId){if(file.size>MAX)return alert('This file i
     const frame=packChunk(seq,preloadedStart,new Uint8Array(iv),new Uint8Array(data),preloadedEnd>=file.size);
     inflight+=frame.byteLength;
     const p=busSafeSend(frame).finally(()=>{inflight-=frame.byteLength});
+    p.then(()=>{},()=>{});
     pending.push(p);
     const done=preloadedEnd;const pct=Math.round(done/file.size*100);emitPct(done,pct);
     // Advance the preload to the chunk we just started reading.
