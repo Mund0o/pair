@@ -68,7 +68,16 @@ function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataCh
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 async function busSend(data){const bus=fileBus();if(!bus)throw new Error('no file channel');if(typeof data==='string')bus.send(data);else bus.send(data)}
-function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+// ICE servers: STUN for LAN/direct, plus a public TURN relay so two peers on
+// DIFFERENT networks (different NATs) can still connect. Without TURN, WebRTC
+// often can't traverse NAT and the connection hangs forever on "Connecting…".
+// These are Metered's free open test credentials; swap in your own TURN for
+// production. Set PAIR_TURN env (JSON array) to override.
+const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}return[{urls:'stun:stun.l.google.com:19302'},{urls:'turn:openrelay.metered.ca:80',username:'openrelayusername',credential:'openrelaypassword'},{urls:'turn:openrelay.metered.ca:443',username:'openrelayusername',credential:'openrelaypassword'},{urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayusername',credential:'openrelaypassword'}]})();
+function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected'){if(connectTimer){clearTimeout(connectTimer);connectTimer=null}}if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting')armConnectTimeout()};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+  // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
+  // network), surface a clear message instead of hanging on "Connecting…" forever.
+  let connectTimer=null;function armConnectTimeout(){if(connectTimer||pc.connectionState==='connected')return;connectTimer=setTimeout(()=>{if(pc&&pc.connectionState!=='connected'&&pc.connectionState!=='failed'&&pc.connectionState!=='closed'){pairHint.textContent='Still connecting… if this persists, one of you is behind a strict NAT/firewall that blocks the peer connection. Try a different network or add a TURN server.'}},25000)}
   // Negotiate a bidirectional audio transceiver up front so voice works without
   // a renegotiation round-trip once the call starts. No track is attached until
   // the user clicks Start voice, keeping the mic off until then. Keep a direct
