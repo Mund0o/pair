@@ -5,6 +5,18 @@ let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promis
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
 let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null;
 const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio');
+// Lightweight synth sound effects via Web Audio (no asset files needed). Each
+// call lazily creates/resumes the AudioContext so it works after a user gesture
+// and stays quiet until then.
+let audioCtx=null;
+function sfxCtx(){if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)()}catch{return null}}if(audioCtx.state==='suspended'){try{audioCtx.resume()}catch{}}return audioCtx}
+function tone(ctx,freq,start,dur,type='sine',gain=0.18){const o=ctx.createOscillator(),g=ctx.createGain();o.type=type;o.frequency.setValueAtTime(freq,ctx.currentTime+start);g.gain.setValueAtTime(0,ctx.currentTime+start);g.gain.linearRampToValueAtTime(gain,ctx.currentTime+start+0.02);g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+start+dur);o.connect(g).connect(ctx.destination);o.start(ctx.currentTime+start);o.stop(ctx.currentTime+start+dur+0.02)}
+function playSound(kind){
+  const ctx=sfxCtx();if(!ctx)return;
+  if(kind==='connect'){tone(ctx,659.25,0,0.16,'sine',0.16);tone(ctx,987.77,0.12,0.22,'sine',0.16)}
+  else if(kind==='leave'){tone(ctx,523.25,0,0.18,'sine',0.15);tone(ctx,392.00,0.14,0.30,'sine',0.15)}
+  else if(kind==='ring'){tone(ctx,440,0,0.18,'triangle',0.14);tone(ctx,587.33,0.2,0.18,'triangle',0.14);tone(ctx,440,0.4,0.18,'triangle',0.14)}
+}
 // Separate WebSocket used to relay file bytes (E2EE) between peers. Reuses the
 // same signaling host/room, so no extra port forwarding. Binary frames are
 // relayed verbatim; this saturates a LAN far better than WebRTC SCTP.
@@ -32,7 +44,7 @@ let sendAbort=new Map(),fileSeq=0;
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
 const enc=new TextEncoder(),dec=new TextDecoder();
-function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false}else{[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
+function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;playSound('connect')}else{[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
 function cleanSignal(s){return JSON.parse(atob(s.trim()))}function makeSignal(o){return btoa(JSON.stringify(o))}
 async function keyPair(){return crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveKey'])}async function exportPub(k){return crypto.subtle.exportKey('jwk',k)}async function importPub(j){return crypto.subtle.importKey('jwk',j,{name:'ECDH',namedCurve:'P-256'},false,[])}
 async function derive(local,remote){const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);const fp=await crypto.subtle.digest('SHA-256',bits);$('#fingerprint').textContent='Session key fingerprint: '+[...new Uint8Array(fp)].slice(0,4).map(b=>b.toString(16).padStart(2,'0')).join('');sharedKey=await crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt']);}
@@ -40,16 +52,16 @@ async function seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));c
 async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(o.iv)},sharedKey,new Uint8Array(o.data)))}
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
 function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}function addMessage(text,mine=false){$('.empty')?.remove();const el=document.createElement('div');el.className='message '+(mine?'mine':'');el.innerHTML='<div class="bubble"></div><div class="meta">'+(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+'</div>';el.querySelector('.bubble').textContent=text;messages.append(el);messages.scrollTop=messages.scrollHeight}
-function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)))}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e))};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
+function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));else if(o.t==='call-ring')playSound('ring');else if(o.t==='call-end'){playSound('leave');callStatus.textContent='Friend left the call';callStatus.className='call-status'}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e))};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 async function busSend(data){const bus=fileBus();if(!bus)throw new Error('no file channel');if(typeof data==='string')bus.send(data);else bus.send(data)}
-function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pc.onicecandidate=()=>{};pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState))setStatus(pc.connectionState)};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+function setupPeer(){pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);playSound('leave')}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // Negotiate a bidirectional audio transceiver up front so voice works without
   // a renegotiation round-trip once the call starts. No track is attached until
   // the user clicks Start voice, keeping the mic off until then.
   try{const t=pc.addTransceiver('audio',{direction:'sendrecv'});t.setDirection('sendrecv')}catch{}
-  pc.ontrack=e=>{if(e.track.kind==='audio'){try{remoteAudio.srcObject=e.streams[0]||new MediaStream([e.track]);remoteAudio.muted=false;const tryPlay=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{/* autoplay may reject once; retry shortly after a gesture */setTimeout(tryPlay,400)})};tryPlay()}catch{}}};
+  pc.ontrack=e=>{if(e.track.kind==='audio'){try{remoteAudio.srcObject=e.streams[0]||new MediaStream([e.track]);remoteAudio.muted=false;e.track.onended=()=>{playSound('leave');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const tryPlay=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{/* autoplay may reject once; retry shortly after a gesture */setTimeout(tryPlay,400)})};tryPlay()}catch{}}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -264,6 +276,8 @@ async function startCall(){
     const sender=pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
     if(sender){try{sender.replaceTrack(track)}catch{}}else{const t=pc.addTransceiver('audio',{direction:'sendrecv'});try{t.sender.replaceTrack(track)}catch{}}
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
+    // Play the calling jingle locally and let the friend hear a ring too.
+    playSound('ring');try{send({t:'call-ring'})}catch{}
     callStatus.textContent='Voice live';callStatus.className='call-status live';
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0')},1000);
   }catch(e){endCall(true);callStatus.textContent='Mic denied — check permissions';callStatus.className='call-status';}
@@ -285,7 +299,7 @@ function endCall(silent){
   try{remoteAudio.srcObject=null}catch{}
   callActive=false;micMuted=false;
   callBtn.textContent='🎙 Start voice';muteBtn.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
-  if(!silent){callBtn.disabled=!pc;}
+  if(!silent){callBtn.disabled=!pc;try{send({t:'call-end'})}catch{}}
 }
 function toggleMute(){
   if(!localStream)return;
