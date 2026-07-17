@@ -1,0 +1,30 @@
+# Runs coturn for Pair on this PC. Auto-restarts while Docker Desktop is running
+# (even across reboots) via `restart: unless-stopped`, so TURN is always available
+# for you and your friend — independent of whether the Pair app is open.
+#
+# NOTE: On Windows, `network_mode: host` does NOT bind to the host's real
+# network interfaces (unlike Linux). We use explicit port maps instead, and the
+# config tells coturn to listen on all interfaces inside the container.
+#
+# Start once:   docker compose up -d        (or use start-coturn.bat)
+# Stop:         docker compose down
+# Tail logs:    docker compose logs -f
+# Rotate creds: edit coturn/turnserver.conf, then `docker compose restart`
+services:
+  coturn:
+    image: coturn/coturn:4.6.2
+    container_name: pair-coturn
+    restart: unless-stopped
+    ports:
+      # TURN listening port (STUN + TURN on both TCP and UDP).
+      # The router remaps external 3481 → internal 3478.
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      # UDP relay port range. Peers are told to send media to these ports
+      # by the Allocate response, so they MUST be reachable from outside.
+      # Router forwards external 50100-50200 → internal 50100-50200.
+      # NOTE: Windows reserves 49152-49551, so we use 50100+.
+      - "50100-50200:50100-50200/udp"
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command: ["-c", "/etc/coturn/turnserver.conf"]

@@ -47,6 +47,33 @@ Forward TCP port `8787` from your router to this PC. The host uses `ws://localho
 
 If Windows Firewall asks whether Node.js can accept connections, allow it on the intended network. If your ISP uses CGNAT, port forwarding will not work; you would need a public VPS or a VPN overlay.
 
+## TURN relay (fixes "Offer sent. Connecting…" hang across networks)
+
+WebRTC cannot always connect two peers on different home networks directly — symmetric NAT blocks the direct ICE candidates, and without a relay the connection silently hangs even though signaling succeeded. The fix is a self-hosted TURN relay running on the host's PC via Docker.
+
+**One-time setup:**
+
+1. Forward these ports on your router to this PC's LAN IP (`YOUR_LAN_IP`):
+   - TCP `3481` → internal `3478` (port 3478 was already taken by another device on this router)
+   - UDP `3481` → internal `3478`
+   - UDP `50100–50200` → internal `50100–50200` (the relay port range coturn uses; the 49152–49551 range is reserved by Windows)
+2. Start Docker Desktop, then double-click `coturn\start-coturn.bat` (or run `docker compose -f coturn\docker-compose.yml up -d`). coturn auto-restarts across reboots while Docker is running, so TURN stays available whenever either peer opens the app.
+3. That's it — the app already points at this relay (`YOUR_PUBLIC_IP:3481` on the WAN side, remapped to coturn's internal 3478) by default.
+
+To verify it's reachable from outside your network, run from any other machine:
+
+```bash
+docker logs pair-coturn          # local: should show no errors and several "allocate" lines after a call
+```
+
+To change the credential later: edit `coturn\turnserver.conf` (`user=pair:...` line), update `app.js` `SELF_TURN`, rebuild. Or set `PAIR_TURN` at runtime to override everything without touching code:
+
+```bash
+set PAIR_TURN=[{"urls":"turn:YOUR_HOST:3481","username":"pair","credential":"YOUR_SECRET"}]
+```
+
+TURN only relays already-encrypted WebRTC bytes (DTLS-SRTP); it cannot read any chat, file, or voice content.
+
 ## Large files
 
 Files are sliced into chunks, encrypted independently, and streamed with a large in-flight window (up to ~16 MB buffered) and a concurrent decrypt pool so the SCTP link stays saturated. The whole file is never loaded into memory during sending. Receiving very large files requires a Chromium browser with the File System Access API (or the Pair app's disk streaming); otherwise the fallback collects chunks in memory and is suitable only for smaller files. The 120 GB limit is enforced client-side.

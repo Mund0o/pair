@@ -13,3 +13,4 @@ electron-dist/
 *.zip
 Pair-linux-source.zip
 .DS_Store
+nul
