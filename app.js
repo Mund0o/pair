@@ -73,8 +73,8 @@ async function busSend(data){const bus=fileBus();if(!bus)throw new Error('no fil
 // often can't traverse NAT and the connection hangs forever on "Connecting…".
 // These are Metered's free open test credentials; swap in your own TURN for
 // production. Set PAIR_TURN env (JSON array) to override.
-const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}return[{urls:'stun:stun.l.google.com:19302'},{urls:'turn:openrelay.metered.ca:80',username:'openrelayusername',credential:'openrelaypassword'},{urls:'turn:openrelay.metered.ca:443',username:'openrelayusername',credential:'openrelaypassword'},{urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayusername',credential:'openrelaypassword'}]})();
-function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected'){if(connectTimer){clearTimeout(connectTimer);connectTimer=null}}if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting')armConnectTimeout()};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}return[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'turn:openrelay.metered.ca:80',username:'openrelayusername',credential:'openrelaypassword'},{urls:'turn:openrelay.metered.ca:443',username:'openrelayusername',credential:'openrelaypassword'},{urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayusername',credential:'openrelaypassword'},{urls:'turn:global.turn.twilio.com:3478?transport=udp',username:'openrelayusername',credential:'openrelaypassword'}]})();
+function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected'){if(connectTimer){clearTimeout(connectTimer);connectTimer=null}}if(['failed','disconnected','closed'].includes(pc.connectionState)){setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}};pc.oniceconnectionstatechange=()=>{if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(pc.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
   // network), surface a clear message instead of hanging on "Connecting…" forever.
   let connectTimer=null;function armConnectTimeout(){if(connectTimer||pc.connectionState==='connected')return;connectTimer=setTimeout(()=>{if(pc&&pc.connectionState!=='connected'&&pc.connectionState!=='failed'&&pc.connectionState!=='closed'){pairHint.textContent='Still connecting… if this persists, one of you is behind a strict NAT/firewall that blocks the peer connection. Try a different network or add a TURN server.'}},25000)}
@@ -239,7 +239,33 @@ async function automaticPair(kind){
   pairHint.textContent='Connecting to signaling server…'; signaling=new WebSocket(address);
   signaling.onopen=()=>{try{signaling.send(JSON.stringify({type:'join',room}))}catch{}pairHint.textContent='Waiting for your friend in room '+room.toUpperCase()+'…'};
   signaling.onerror=()=>pairHint.textContent='Could not reach the signaling server. Check the address and firewall.';
-  signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);if(message.type==='full'){pairHint.textContent='That room already has two people.';return}if(message.type==='peer-ready'&&role==='host'){setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));openStreamRelay(address,room);pairHint.textContent='Offer sent. Connecting…'}if(message.type==='signal'){const remote=message.payload;if(remote.kind==='offer'&&role==='join'){setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});await derive(kp,remote.pub);await pc.setLocalDescription(await pc.createAnswer());await waitIce();signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'}else if(remote.kind==='answer'&&role==='host'){await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});await derive(pc._kp,remote.pub);openStreamRelay(address,room);pairHint.textContent='Secure connection established.'}}}catch(e){console.warn('signaling message error',e)}};
+  signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);
+    if(message.type==='full'){pairHint.textContent='That room already has two people.';return}
+    if(message.type==='peer-ready'&&role==='host'){
+      setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();
+      await pc.setLocalDescription(await pc.createOffer());await waitIce();
+      signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
+      openStreamRelay(address,room);pairHint.textContent='Offer sent. Connecting…';
+      // If the friend never answers (wrong role, different room, or an old build
+      // without TURN), don't hang silently — tell them what to check.
+      setTimeout(()=>{if(pc&&pc.connectionState!=='connected'){pairHint.textContent='No answer from your friend after 20s. Make sure exactly ONE of you clicked Host and the other clicked Join, you are in the SAME room code, and both are on the latest version (v1.0.0+ with TURN).'}},20000)
+    }
+    if(message.type==='signal'){const remote=message.payload;
+      // Both clicked Host: each receives the other's offer but role==='host', so
+      // neither branch matches. Surface it instead of hanging.
+      if(remote.kind==='offer'&&role==='host'){pairHint.textContent='Both of you clicked Host. One of you must click Leave, then that person clicks Join instead.';return}
+      if(remote.kind==='offer'&&role==='join'){
+        setupPeer();const kp=await keyPair();pc._kp=kp;
+        await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});await derive(kp,remote.pub);
+        await pc.setLocalDescription(await pc.createAnswer());await waitIce();
+        signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
+        openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'
+      }else if(remote.kind==='answer'&&role==='host'){
+        await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});await derive(pc._kp,remote.pub);
+        openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
+      }
+    }
+  }catch(e){console.warn('signaling message error',e);pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
 }
 // Open the separate relay socket used to move file bytes. Same host + room as
 // the signaling socket; the server relays binary frames to the other peer.
