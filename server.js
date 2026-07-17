@@ -155,6 +155,17 @@ function leave(socket) {
   socket.room = null;
 }
 
+// Sweep rooms that have only a non-open socket left (covers the rare case where
+// a 'close' event never fired, e.g. a dropped TCP connection). Without this the
+// rooms map could retain a single-member entry indefinitely.
+setInterval(() => {
+  for (const [name, peers] of rooms) {
+    const live = peers.filter(p => p.readyState === WebSocket.OPEN);
+    if (live.length) rooms.set(name, live);
+    else rooms.delete(name);
+  }
+}, 60000).unref();
+
 wss.on('connection', socket => {
   socket.on('message', (raw, isBinary) => {
     // Binary frames are file-stream chunks; relay them verbatim to the peer.
