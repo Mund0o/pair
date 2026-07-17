@@ -29,8 +29,19 @@ function playSound(kind){
   else if(kind==='leave'){tone(ctx,523.25,0,0.18,'sine',0.15);tone(ctx,392.00,0.14,0.30,'sine',0.15)}
   else if(kind==='ring'){tone(ctx,440,0,0.18,'triangle',0.14);tone(ctx,587.33,0.2,0.18,'triangle',0.14);tone(ctx,440,0.4,0.18,'triangle',0.14)}
 }
-function sinkRemoteAudio(ctx,stream){try{if(!ctx||ctx.state==='suspended')return;const src=ctx.createMediaStreamSource(stream);src.connect(ctx.destination);return src}catch{}}
-function setupPermanentAudioSink(){try{const ctx=sfxCtx();const st=remoteAudio.srcObject;if(!ctx||!st||!st.getAudioTracks().length)return;if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}ctx.audioSink=sinkRemoteAudio(ctx,st)}catch{}}
+function setupPermanentAudioSink(){
+  try{
+    const ctx=sfxCtx();const st=remoteAudio.srcObject;
+    if(!ctx||!st||!st.getAudioTracks().length)return;
+    if(ctx.state==='suspended'){
+      ctx.addEventListener('statechange',function h(){if(ctx.state==='running'){ctx.removeEventListener('statechange',h);setupPermanentAudioSink()}});
+      try{ctx.resume()}catch{}
+      return
+    }
+    if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}
+    try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.destination);ctx.audioSink=src}catch{}
+  }catch{}
+}
 // Separate WebSocket used to relay file bytes (E2EE) between peers. Reuses the
 // same signaling host/room, so no extra port forwarding. Binary frames are
 // relayed verbatim; this saturates a LAN far better than WebRTC SCTP.
@@ -104,7 +115,8 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   // even after endCall nulls its track and the receiver track is momentarily
   // unavailable — which would otherwise fall through to a second m-line.
   try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch{audioTransceiver=null}
-  pc.ontrack=e=>{if(e.track.kind==='audio'){try{audioTransceiver=e.transceiver;const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}catch{}}};
+  let gestureGuard=false;
+  pc.ontrack=e=>{if(e.track.kind==='audio'){try{audioTransceiver=e.transceiver;const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}catch{}}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -290,7 +302,7 @@ async function automaticPair(kind){
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
-function disconnectRoom(){try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};
+function disconnectRoom(){try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
@@ -343,16 +355,21 @@ async function startCall(){
     // Find the correct sender: prefer a transceiver that was actually negotiated
     // (has a mid, meaning it's part of the SDP). audioTransceiver is updated by
     // ontrack to always point at the real one, but we also check mid as a safety
-    // net in case ontrack hasn't fired yet.
-    const at=audioTransceiver&&audioTransceiver.mid?audioTransceiver:pc.getTransceivers().find(t=>t.mid&&t.receiver.track&&t.receiver.track.kind==='audio');
-    const sender=at?at.sender:pc.getSenders().find(s=>s.track&&s.track.kind==='audio');
-    if(sender){try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}}else{const t=pc.addTransceiver('audio',{direction:'sendrecv'});try{await t.sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}}
+    // net in case ontrack hasn't fired yet. NEVER fall through to addTransceiver
+    // — that would create a second m-line and trigger unhandled renegotiation.
+    const tr=audioTransceiver&&audioTransceiver.mid?audioTransceiver
+      :pc.getTransceivers().find(t=>t.mid&&t.kind==='audio')
+      ||audioTransceiver
+      ||pc.getTransceivers().find(t=>t.kind==='audio');
+    const sender=tr?tr.sender:null;
+    if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
+    try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
     // Re-trigger remote audio playback now that we're in a gesture (button click).
     // On Linux/PipeWire the initial ontrack play() often gets blocked by autoplay
     // policy and never retried because replaceTrack doesn't fire ontrack again.
     // Also re-acquire srcObject from the transceiver in case endCall previously
     // cleared it (e.g. on a temporary ICE drop).
-    if(!remoteAudio.srcObject){const at=pc.getTransceivers().find(t=>t.mid&&t.receiver.track&&t.receiver.track.kind==='audio');if(at){try{remoteAudio.srcObject=new MediaStream([at.receiver.track])}catch{}}}
+    if(!remoteAudio.srcObject){const tr=pc.getTransceivers().find(t=>t.mid&&t.kind==='audio');if(tr&&tr.receiver.track){try{remoteAudio.srcObject=new MediaStream([tr.receiver.track])}catch{}}}
     try{remoteAudio.muted=false;remoteAudio.play()}catch{}
     // Connect a permanent AudioContext sink as a robust fallback against autoplay
     // restrictions. AudioContext can be resumed on gesture reliably across Linux.
