@@ -29,6 +29,8 @@ function playSound(kind){
   else if(kind==='leave'){tone(ctx,523.25,0,0.18,'sine',0.15);tone(ctx,392.00,0.14,0.30,'sine',0.15)}
   else if(kind==='ring'){tone(ctx,440,0,0.18,'triangle',0.14);tone(ctx,587.33,0.2,0.18,'triangle',0.14);tone(ctx,440,0.4,0.18,'triangle',0.14)}
 }
+function sinkRemoteAudio(ctx,stream){try{if(!ctx||ctx.state==='suspended')return;const src=ctx.createMediaStreamSource(stream);src.connect(ctx.destination);return src}catch{}}
+function setupPermanentAudioSink(){try{const ctx=sfxCtx();const st=remoteAudio.srcObject;if(!ctx||!st||!st.getAudioTracks().length)return;if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}ctx.audioSink=sinkRemoteAudio(ctx,st)}catch{}}
 // Separate WebSocket used to relay file bytes (E2EE) between peers. Reuses the
 // same signaling host/room, so no extra port forwarding. Binary frames are
 // relayed verbatim; this saturates a LAN far better than WebRTC SCTP.
@@ -102,8 +104,6 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   // even after endCall nulls its track and the receiver track is momentarily
   // unavailable — which would otherwise fall through to a second m-line.
   try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch{audioTransceiver=null}
-  function sinkRemoteAudio(ctx,stream){try{if(!ctx||ctx.state==='suspended')return;const src=ctx.createMediaStreamSource(stream);src.connect(ctx.destination);return src}catch{}}
-  function setupPermanentAudioSink(){try{const ctx=sfxCtx();const st=remoteAudio.srcObject;if(!ctx||!st||!st.getAudioTracks().length)return;if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}ctx.audioSink=sinkRemoteAudio(ctx,st)}catch{}}
   pc.ontrack=e=>{if(e.track.kind==='audio'){try{audioTransceiver=e.transceiver;const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}catch{}}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
