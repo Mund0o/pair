@@ -1,7 +1,7 @@
 {
-  "version": "1.0.4",
-  "notes": "Fix file transfer freeze and one-way voice on Linux",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.4/Pair.Setup.1.0.4.exe",
-  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.4/Pair.Setup.1.0.4.exe.blockmap",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.4/pair-p2p-1.0.4.tar.gz"
+  "version": "1.0.6",
+  "notes": "Update available.",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.6/Pair.Setup.1.0.6.exe",
+  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.6/Pair.Setup.1.0.6.exe.blockmap",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.6/pair-p2p-1.0.6.tar.gz"
 }

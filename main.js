@@ -1,4 +1,5 @@
 const { app, BrowserWindow, session, dialog, ipcMain } = require('electron');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 require('./server.js');
@@ -10,14 +11,18 @@ require('./server.js');
 let writeStream = null;
 let writeFailed = null;
 
+let streamClosing = false;
 function closeStream() {
-  if (!writeStream) return Promise.resolve();
+  if (!writeStream || streamClosing) return Promise.resolve();
+  streamClosing = true;
   const s = writeStream;
   writeStream = null;
   return new Promise(resolve => {
-    s.once('close', resolve);
-    s.once('error', resolve);
+    const done = () => { streamClosing = false; resolve(); };
+    s.once('close', done);
+    s.once('error', done);
     s.destroy();
+    setTimeout(done, 5000);
   });
 }
 
@@ -75,12 +80,30 @@ ipcMain.handle('pair:saveEnd', () => new Promise((resolve, reject) => {
   if (!writeStream) return resolve(false);
   const s = writeStream;
   writeStream = null;
-  s.once('finish', () => resolve(true));
-  s.once('error', err => reject(err));
+  const to = setTimeout(() => resolve(false), 10000);
+  s.once('finish', () => { clearTimeout(to); resolve(true); });
+  s.once('error', err => { clearTimeout(to); reject(err); });
   s.end();
 }));
 
 ipcMain.handle('pair:saveCancel', () => closeStream().then(() => true));
+
+// --- Settings persistence (sandboxed renderer can't rely on localStorage) ---
+// Writes/reads a small JSON file in the app's userData directory so room code
+// and signaling address survive restarts even in sandboxed Electron on file://.
+const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+function readSettings() {
+  try { return JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch { return {}; }
+}
+function writeSettings(obj) {
+  try { fs.writeFileSync(settingsPath, JSON.stringify(obj), 'utf8'); } catch {}
+}
+ipcMain.handle('pair:getSetting', (_e, key) => (readSettings())[key]);
+ipcMain.handle('pair:setSetting', (_e, key, value) => {
+  const s = readSettings();
+  if (value == null) delete s[key]; else s[key] = value;
+  writeSettings(s);
+});
 
 // Auto-update: start the check loop and listen for the renderer's request to
 // install a downloaded Windows update.

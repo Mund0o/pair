@@ -15,6 +15,13 @@ contextBridge.exposeInMainWorld('pairSave', {
   cancel: () => ipcRenderer.invoke('pair:saveCancel')
 });
 
+// Settings persistence bridge for the sandboxed renderer. Falls through to
+// localStorage automatically when running in a browser (no IPC available).
+contextBridge.exposeInMainWorld('pairSettings', {
+  get: key => ipcRenderer.invoke('pair:getSetting', key),
+  set: (key, value) => ipcRenderer.invoke('pair:setSetting', key, value)
+});
+
 // Read-only environment info + auto-update surface. `platform` lets the
 // renderer branch its update UX (Win = auto-install, Linux = download link).
 contextBridge.exposeInMainWorld('pairEnv', {
