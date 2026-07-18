@@ -322,7 +322,12 @@ async function automaticPair(kind){
         // Ensure the audio transceiver's direction is sendrecv so the answer
         // includes a sender — the browser may have created a recvonly transceiver
         // for the offer's audio m-line when no local sender track was attached yet.
-        pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv'){t.setDirection('sendrecv');logCallEvent('Diag: set audioTr direction to sendrecv (was '+t.direction+')')}}catch(e){logCallEvent('Diag: setDirection error: '+e.message)}});audioTransceiver=audioTransceiver||pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio');
+        // Force audio transceiver direction to sendrecv so the answer includes a
+        // sender. Also update audioTransceiver to the MATCHED transceiver (with
+        // non-null mid) so startCall uses it — the one from addTransceiver in
+        // setupPeer has mid=null and would send on an un-negotiated path.
+        pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv'){t.setDirection('sendrecv');logCallEvent('Diag: set audioTr direction to sendrecv (was '+t.direction+')')}}catch(e){logCallEvent('Diag: setDirection error: '+e.message)}});
+        const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
         logCallEvent('Diag: before createAnswer transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
         await pc.setLocalDescription(await pc.createAnswer());if(!pc)return;await waitIce();if(!signaling)return;
         signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
@@ -331,6 +336,7 @@ async function automaticPair(kind){
         logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
         await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;await derive(pc._kp,remote.pub);
         logCallEvent('Diag: after setRD(answer)');
+        const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
         openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
       }else if(remote.kind==='reneg-offer'){
         // Either peer can initiate screen share, so both roles must be able to
