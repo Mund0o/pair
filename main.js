@@ -198,5 +198,56 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', async () => {
   await closeStream();
+  stopNativeCapture();
   if (process.platform !== 'darwin') app.quit();
+});
+
+// --- Native WASAPI loopback capture with echo cancellation ---
+// Loads the C++ addon that captures system audio and cancels Pair's voice output.
+// The addon must be built first via 'node-gyp rebuild' (or electron-rebuild).
+let nativeCapture = null;
+function loadNativeCapture() {
+  if (nativeCapture) return nativeCapture;
+  try {
+    const addon = require('./build/Release/pair-capture');
+    nativeCapture = addon;
+    return addon;
+  } catch (e) {
+    console.warn('Native capture addon not available:', e.message);
+    return null;
+  }
+}
+function startNativeCapture(win) {
+  const addon = loadNativeCapture();
+  if (!addon) { win.webContents.send('pair:captureError', 'Addon not built'); return; }
+  if (addon._running) return;
+  addon.start(
+    (buf, frames) => {
+      // Clean audio data from native addon → send to renderer
+      if (win && !win.isDestroyed()) win.webContents.send('pair:cleanAudio', buf, frames);
+    },
+    (errMsg) => {
+      if (win && !win.isDestroyed()) win.webContents.send('pair:captureError', errMsg);
+    }
+  );
+  addon._running = true;
+  const fmt = addon.getFormat();
+  if (win && !win.isDestroyed()) win.webContents.send('pair:captureFormat', fmt);
+}
+function stopNativeCapture() {
+  const addon = nativeCapture;
+  if (!addon || !addon._running) return;
+  try { addon.stop(); } catch {}
+  addon._running = false;
+}
+ipcMain.on('pair:startCapture', (event) => {
+  startNativeCapture(event.sender);
+});
+ipcMain.on('pair:stopCapture', () => {
+  stopNativeCapture();
+});
+ipcMain.on('pair:captureRef', (_event, buf) => {
+  const addon = nativeCapture;
+  if (!addon || !addon._running) return;
+  try { addon.pushReference(buf); } catch (e) { console.warn('pushReference error:', e); }
 });

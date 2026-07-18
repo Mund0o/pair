@@ -1,0 +1,11 @@
+{
+  "targets":[
+    {
+      "target_name":"pair-capture",
+      "sources":["pair-capture.cc"],
+      "libraries":["-lole32","-loleaut32"],
+      "include_dirs":["../node_modules/node-addon-api"],
+      "msvs_settings":{"VCCLCompilerTool":{"ExceptionHandling":1}}
+    }
+  ]
+}

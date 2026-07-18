@@ -5,6 +5,8 @@ const SCREEN_PRESETS={'480p30':{width:{ideal:854,max:854},height:{ideal:480,max:
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
 let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0;
+// Native WASAPI loopback capture with echo cancellation (subtracts Pair's voice).
+let screenNative=false,screenRefCtx=null,screenRefNode=null,screenOutCtx=null,screenOutNode=null,screenOutDest=null,screenCleanBuf=null,screenCleanWP=0,screenCleanRP=0,screenCleanAvail=0,screenCaptureCleanup=null;
 // Direct handle to the audio transceiver created in setupPeer, so startCall can
 // always reuse it (never add a second m-line). Nulled on disconnect/teardown.
 let audioTransceiver=null;
@@ -511,6 +513,56 @@ async function renegotiate(){
   }catch(e){console.warn('renegotiate error',e)}
   renegPending=false;
 }
+// Native WASAPI capture setup: captures system audio via C++ addon, subtracts
+// Pair's voice (the reference) to prevent echo, outputs clean track.
+async function setupNativeScreenCapture(){
+  const refStream=remoteAudio.srcObject;
+  if(!refStream||!refStream.getAudioTracks().length)return null;
+  // Output pipeline: ScriptProcessorNode injects clean samples from ring buffer → MediaStreamDestination → track
+  screenOutCtx=new AudioContext();screenOutDest=screenOutCtx.createMediaStreamDestination();
+  screenOutDest.channelCount=1;
+  screenCleanBuf=new Float32Array(480000); // 10s ring buffer at 48kHz
+  screenCleanWP=0;screenCleanRP=0;screenCleanAvail=0;
+  const bufSize=1024;
+  screenOutNode=screenOutCtx.createScriptProcessor(bufSize,0,1);
+  screenOutNode.onaudioprocess=e=>{
+    const out=e.outputBuffer.getChannelData(0);
+    if(screenCleanAvail>=out.length){for(let i=0;i<out.length;i++){out[i]=screenCleanBuf[screenCleanRP];screenCleanRP=(screenCleanRP+1)%screenCleanBuf.length}screenCleanAvail-=out.length
+    }else out.fill(0);
+  };
+  screenOutNode.connect(screenOutDest);
+  // Reference pipeline: capture Pair's voice from remoteAudio → send to native addon
+  screenRefCtx=new AudioContext();
+  const refSource=screenRefCtx.createMediaStreamSource(refStream);
+  screenRefNode=screenRefCtx.createScriptProcessor(bufSize,1,0);
+  screenRefNode.onaudioprocess=e=>{
+    const inData=e.inputBuffer.getChannelData(0);
+    if(window.pairCapture)try{window.pairCapture.pushReference(inData.buffer.slice(inData.byteOffset,inData.byteOffset+inData.byteLength))}catch{}
+  };
+  refSource.connect(screenRefNode);
+  // Register clean audio receiver
+  const unsub=window.pairCapture.onCleanAudio((buf,frames)=>{
+    const data=new Float32Array(buf);
+    for(let i=0;i<data.length&&screenCleanAvail<screenCleanBuf.length;i++){screenCleanBuf[screenCleanWP]=data[i];screenCleanWP=(screenCleanWP+1)%screenCleanBuf.length;screenCleanAvail++}
+  });
+  const unsubErr=window.pairCapture.onError(msg=>{console.warn('capture err:',msg)});
+  screenCaptureCleanup=()=>{try{unsub()}catch{};try{unsubErr()}catch{}};
+  // Start native capture
+  window.pairCapture.start();
+  screenNative=true;
+  return screenOutDest.stream.getAudioTracks()[0];
+}
+function cleanupNativeScreenCapture(){
+  screenNative=false;
+  if(screenCaptureCleanup){try{screenCaptureCleanup()}catch{};screenCaptureCleanup=null}
+  if(window.pairCapture)try{window.pairCapture.stop()}catch{}
+  if(screenRefNode){try{screenRefNode.disconnect()}catch{};screenRefNode=null}
+  if(screenRefCtx){try{screenRefCtx.close()}catch{};screenRefCtx=null}
+  if(screenOutNode){try{screenOutNode.disconnect()}catch{};screenOutNode=null}
+  if(screenOutDest){screenOutDest=null}
+  if(screenOutCtx){try{screenOutCtx.close()}catch{};screenOutCtx=null}
+  screenCleanBuf=null;screenCleanWP=0;screenCleanRP=0;screenCleanAvail=0;
+}
 async function startScreenShare(){
   if(screenActive||!pc)return;
   const gen=++screenGen;
@@ -543,9 +595,12 @@ async function startScreenShare(){
     // Add the video track
     let sender;
     try{sender=pc.addTrack(track,stream)}catch{stream.getTracks().forEach(t=>t.stop());return}
-    // Add the audio track if present (system audio)
+    // Audio: try native WASAPI capture (echo-free), fall back to raw system audio.
     const audioTrack=stream.getAudioTracks()[0];
-    if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
+    let nativeTrack=null;
+    if(audioTrack&&window.pairCapture)try{nativeTrack=await setupNativeScreenCapture()}catch(e){console.warn('native capture err:',e)}
+    if(nativeTrack){audioTrack.stop();try{pc.addTrack(nativeTrack,new MediaStream([nativeTrack]))}catch{}
+    }else if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
     // Prefer AV1 then VP9 then VP8 codec order
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
@@ -564,6 +619,7 @@ async function stopScreenShare(fromEnd){
   if(!screenActive&&!fromEnd)return;
   screenGen++;
   screenActive=false;
+  cleanupNativeScreenCapture();
   if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null}
   if(pc){
     const senders=pc.getTransceivers().filter(t=>t.sender&&t.sender.track&&t.sender.track.kind==='video').map(t=>t.sender);

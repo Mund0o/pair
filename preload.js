@@ -43,3 +43,34 @@ contextBridge.exposeInMainWorld('pairEnv', {
   // auto-update work for a remote peer without separate manual config.
   setFeed: url => ipcRenderer.send('pair:setFeed', url)
 });
+
+// Native WASAPI loopback capture with echo cancellation bridge.
+// The renderer sends reference audio (Pair's voice) and receives clean audio.
+// Only available when the native addon is built and loaded.
+contextBridge.exposeInMainWorld('pairCapture', {
+  start: () => ipcRenderer.send('pair:startCapture'),
+  stop: () => ipcRenderer.send('pair:stopCapture'),
+  // Send reference audio samples (Float32Array) to the native addon for cancellation.
+  pushReference: buf => ipcRenderer.send('pair:captureRef', buf),
+  // Register for clean audio data from the native addon.
+  onCleanAudio: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_e, buf, frames) => cb(buf, frames);
+    ipcRenderer.on('pair:cleanAudio', listener);
+    return () => ipcRenderer.removeListener('pair:cleanAudio', listener);
+  },
+  // Register for capture errors.
+  onError: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_e, msg) => cb(msg);
+    ipcRenderer.on('pair:captureError', listener);
+    return () => ipcRenderer.removeListener('pair:captureError', listener);
+  },
+  // Register for capture format info.
+  onFormat: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_e, fmt) => cb(fmt);
+    ipcRenderer.on('pair:captureFormat', listener);
+    return () => ipcRenderer.removeListener('pair:captureFormat', listener);
+  }
+});
