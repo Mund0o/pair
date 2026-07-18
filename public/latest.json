@@ -1,7 +1,7 @@
 {
-  "version": "1.0.27",
-  "notes": "Update available.",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.27/Pair.Setup.1.0.27.exe",
-  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.27/Pair.Setup.1.0.27.exe.blockmap",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.27/pair-p2p-1.0.27.tar.gz"
+"version": "1.0.28",
+  "notes": "Fix voice audio: stop ontrack from overwriting audioTransceiver reference. Preserve the SDP-negotiated transceiver.",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.28/Pair.Setup.1.0.28.exe",
+  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.28/Pair.Setup.1.0.28.exe.blockmap",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.28/pair-p2p-1.0.28.tar.gz"
 }
