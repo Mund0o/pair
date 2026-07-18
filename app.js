@@ -529,7 +529,7 @@ async function startScreenShare(){
     // Prefer AV1 then VP9 then VP8 codec order
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
     // Set bitrate and scaling based on capture resolution for smooth 4K60.
-    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){const settings=track.getSettings();const w=settings?.width||1920;const scale=w>2560?3:w>1920?2:1;p.encodings.forEach(e=>{e.maxBitrate=scale>1?30_000_000:15_000_000;e.scaleResolutionDownBy=scale;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
+    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){const settings=track.getSettings();const w=settings?.width||1920;const scale=w>2560?2:w>1920?1.5:1;p.encodings.forEach(e=>{e.maxBitrate=scale>1?75_000_000:15_000_000;e.scaleResolutionDownBy=scale;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
