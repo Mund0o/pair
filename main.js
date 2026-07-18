@@ -156,15 +156,14 @@ app.whenReady().then(() => {
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-    desktopCapturer.getSources({ types: ['screen', 'window'] })
+    desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 320, height: 240 } })
       .then(sources => {
         if (!sources.length) { callback({}); return }
-        // Pick the primary display's source; fall back to first available.
         const pd = screen.getPrimaryDisplay();
-        const src = sources.find(s => s.display_id === String(pd.id)) || sources[0];
+        const src = sources.find(s => s.display_id === String(pd.id)) || sources.find(s => s.name === 'Entire Screen') || sources[0];
         callback({ video: src, audio: request.audioRequested ? 'loopback' : undefined });
       })
-      .catch(() => callback({}));
+      .catch(e => { console.error('Display media request error:', e); callback({}) });
   });
   createWindow();
   startAutoUpdater();
