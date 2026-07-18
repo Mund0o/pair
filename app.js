@@ -511,25 +511,6 @@ async function renegotiate(){
   }catch(e){console.warn('renegotiate error',e)}
   renegPending=false;
 }
-// Mix-minus: capture system audio, subtract Pair's voice output to prevent echo.
-// Uses createMediaStreamSource (not createMediaElementSource) to avoid conflicts.
-async function cleanScreenAudio(displayStream,pc){
-  const raw=displayStream.getAudioTracks()[0];
-  if(!raw)return null;
-  const remoteStream=remoteAudio.srcObject;
-  if(!remoteStream)return raw;
-  try{
-    if(!pc._mixCtx){pc._mixCtx=new AudioContext();if(pc._mixCtx.state==='suspended')await pc._mixCtx.resume()}
-    const ctx=pc._mixCtx;
-    const sysSource=ctx.createMediaStreamSource(displayStream);
-    const pairSource=ctx.createMediaStreamSource(remoteStream);
-    const inv=ctx.createGain();inv.gain.value=-0.8;
-    const dest=ctx.createMediaStreamDestination();
-    sysSource.connect(dest);pairSource.connect(inv);inv.connect(dest);
-    const clean=dest.stream.getAudioTracks()[0];
-    if(clean){raw.stop();return clean}else return raw;
-  }catch(e){console.warn('mix-minus failed:',e);return raw}
-}
 async function startScreenShare(){
   if(screenActive||!pc)return;
   const gen=++screenGen;
@@ -553,7 +534,7 @@ async function startScreenShare(){
     const preset=SCREEN_PRESETS[screenPreset.value];
     const constraints=preset?{video:{...preset}}:{video:true};
     constraints.video.cursor='always';
-    constraints.audio=preset?{echoCancellation:false,autoGainControl:false,noiseSuppression:false}:true;
+    constraints.audio=screenAudioOn?(preset?{echoCancellation:false,autoGainControl:false,noiseSuppression:false}:true):false;
     const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
     screenStream=stream;
@@ -562,8 +543,8 @@ async function startScreenShare(){
     // Add the video track
     let sender;
     try{sender=pc.addTrack(track,stream)}catch{stream.getTracks().forEach(t=>t.stop());return}
-    // Add the audio track (system audio minus Pair's voice output to prevent echo)
-    const audioTrack=await cleanScreenAudio(stream,pc);
+    // Add the audio track if present (system audio)
+    const audioTrack=stream.getAudioTracks()[0];
     if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
     // Prefer AV1 then VP9 then VP8 codec order
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
@@ -598,6 +579,10 @@ async function stopScreenShare(fromEnd){
 }
 screenBtn.onclick=()=>{if(screenActive)stopScreenShare();else startScreenShare()};
 screenPreset.onchange=()=>{if(screenActive){stopScreenShare();startScreenShare()}};
+// Screen share audio toggle — on by default, turn off to stop capturing system audio (prevents echo feedback on Windows loopback).
+let screenAudioOn=true;
+const audioToggleBtn=document.createElement('button');audioToggleBtn.textContent='🔊 Audio';audioToggleBtn.className='text-button';audioToggleBtn.style.cssText='font-size:11px;min-height:28px;padding:0 8px;border:1px solid var(--green);border-radius:4px;color:var(--green)';
+audioToggleBtn.onclick=()=>{screenAudioOn=!screenAudioOn;audioToggleBtn.textContent=screenAudioOn?'🔊 Audio':'🔇 Muted';audioToggleBtn.style.borderColor=screenAudioOn?'var(--green)':'var(--line)';audioToggleBtn.style.color=screenAudioOn?'var(--green)':'var(--dim)'};screenBtn.parentElement.insertBefore(audioToggleBtn,screenStatus.nextSibling);
 // Volume slider for the remote screen share audio, shown on right-click.
 const screenVolWrap=document.createElement('div');screenVolWrap.style.cssText='display:none;position:absolute;bottom:52px;right:12px;z-index:11;background:rgba(0,0,0,.75);border-radius:6px;padding:8px 12px';
 const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Volume';screenVolLabel.style.cssText='color:#fff;font-size:11px;margin-right:8px';
