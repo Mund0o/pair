@@ -434,7 +434,7 @@ function toggleMute(){
   localStream.getAudioTracks().forEach(t=>t.enabled=!micMuted);
   muteBtn.textContent=micMuted?'🎙 Unmute mic':'🔇 Mute mic';
 }
-callBtn.onclick=()=>{if(callActive)endCall(false);else startCall()};
+callBtn.onclick=()=>{if(callActive)endCall(false);else{try{remoteAudio.muted=false;remoteAudio.play()}catch{};setupPermanentAudioSink();startCall()}};
 muteBtn.onclick=toggleMute;
 
 // --- Screen share -------------------------------------------------------------
