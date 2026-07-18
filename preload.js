@@ -1,5 +1,4 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const os = require('os');
 
 // Minimal, audited bridge for streaming an incoming file to disk.
 // The renderer is sandboxed, so it cannot touch `fs` directly — only these
@@ -25,7 +24,7 @@ contextBridge.exposeInMainWorld('pairSettings', {
 // Read-only environment info + auto-update surface. `platform` lets the
 // renderer branch its update UX (Win = auto-install, Linux = download link).
 contextBridge.exposeInMainWorld('pairEnv', {
-  platform: os.platform(),
+  platform: process.platform,
   isApp: true,
   toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
   getSources: () => ipcRenderer.invoke('pair:getSources'),
