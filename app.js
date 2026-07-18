@@ -534,7 +534,7 @@ async function startScreenShare(){
     const preset=SCREEN_PRESETS[screenPreset.value];
     const constraints=preset?{video:{...preset}}:{video:true};
     constraints.video.cursor='always';
-    constraints.audio=preset?{echoCancellation:false,autoGainControl:false,noiseSuppression:false}:true;
+    constraints.audio=screenAudioEnabled?(preset?{echoCancellation:false,autoGainControl:false,noiseSuppression:false}:true):false;
     const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
     screenStream=stream;
@@ -579,6 +579,18 @@ async function stopScreenShare(fromEnd){
 }
 screenBtn.onclick=()=>{if(screenActive)stopScreenShare();else startScreenShare()};
 screenPreset.onchange=()=>{if(screenActive){stopScreenShare();startScreenShare()}};
+// Screen audio toggle (system audio capture). Off by default to avoid echoing own voice.
+let screenAudioEnabled=false;
+const screenAudioBtn=document.createElement('button');screenAudioBtn.textContent='🔇 No audio';screenAudioBtn.className='text-button';screenAudioBtn.style.cssText='font-size:11px;min-height:28px;padding:0 8px;border:1px solid var(--line);border-radius:4px';
+screenAudioBtn.onclick=()=>{screenAudioEnabled=!screenAudioEnabled;screenAudioBtn.textContent=screenAudioEnabled?'🔊 Audio on':'🔇 No audio';screenAudioBtn.style.borderColor=screenAudioEnabled?'var(--green)':'var(--line)'};screenBtn.parentElement.insertBefore(screenAudioBtn,screenStatus.nextSibling);
+// Volume slider for the remote screen share audio, shown on right-click.
+const screenVolWrap=document.createElement('div');screenVolWrap.style.cssText='display:none;position:absolute;bottom:52px;right:12px;z-index:11;background:rgba(0,0,0,.75);border-radius:6px;padding:8px 12px';
+const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Volume';screenVolLabel.style.cssText='color:#fff;font-size:11px;margin-right:8px';
+const screenVol=document.createElement('input');screenVol.type='range';screenVol.min=0;screenVol.max=100;screenVol.value=100;screenVol.style.cssText='width:80px;height:4px;cursor:pointer;accent-color:#5865f2;vertical-align:middle';
+screenVol.oninput=()=>{remoteScreen.volume=screenVol.value/100};
+screenVolWrap.appendChild(screenVolLabel);screenVolWrap.appendChild(screenVol);remoteScreen.parentElement.appendChild(screenVolWrap);
+remoteScreen.addEventListener('contextmenu',e=>{e.preventDefault();screenVolWrap.style.display=screenVolWrap.style.display==='none'?'flex':'none';screenVolWrap.style.alignItems='center'});
+document.addEventListener('click',e=>{if(!screenVolWrap.contains(e.target)&&e.target!==remoteScreen)screenVolWrap.style.display='none'});
 function toggleRemoteFs(){const is=remoteScreen.classList.toggle('fs');fsBtn.textContent=is?'✕ Exit fullscreen':'⛶ Fullscreen'}
 remoteScreen.ondblclick=toggleRemoteFs;
 const fsBtn=document.createElement('button');fsBtn.className='fs-btn hidden';fsBtn.textContent='⛶ Fullscreen';fsBtn.onclick=toggleRemoteFs;remoteScreen.parentElement.appendChild(fsBtn);const obs=new MutationObserver(()=>{fsBtn.classList.toggle('hidden',remoteScreen.hidden)});obs.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});
