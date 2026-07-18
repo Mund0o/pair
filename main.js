@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 require('./server.js');
@@ -152,6 +152,19 @@ app.whenReady().then(() => {
   // Needed for the browser File System Access API used to stream large downloads.
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media' || permission === 'notifications' || permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+  });
+  // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
+  // Without this handler the API throws "Not supported".
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    desktopCapturer.getSources({ types: ['screen', 'window'] })
+      .then(sources => {
+        if (!sources.length) { callback({}); return }
+        // Pick the primary display's source; fall back to first available.
+        const pd = screen.getPrimaryDisplay();
+        const src = sources.find(s => s.display_id === String(pd.id)) || sources[0];
+        callback({ video: src, audio: request.audioRequested ? 'loopback' : undefined });
+      })
+      .catch(() => callback({}));
   });
   createWindow();
   startAutoUpdater();
