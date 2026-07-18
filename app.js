@@ -12,7 +12,7 @@ let audioTransceiver=null;
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
 let connectSoundDone=false,friendLeftNotified=false;
 let screenTransceiver=null,screenActive=false,screenStream=null,screenGen=0;
-const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio');
+const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio');
 // Lightweight synth sound effects via Web Audio (no asset files needed). Each
 // call lazily creates/resumes the AudioContext so it works after a user gesture
 // and stays quiet until then.
@@ -421,7 +421,7 @@ async function startCall(){
     if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
     // Increase Opus encoder bitrate for better audio quality
-    try{const p=sender.getParameters();if(p&&p.codecs){p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=60;c.ptime=20;if(c.parameters){c.parameters.maxaveragebitrate=128000;c.parameters.useinbandfec=1;c.parameters.stereo=0}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
+    try{const p=sender.getParameters();if(p&&p.codecs){p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=60;c.ptime=20;if(c.parameters){c.parameters.maxaveragebitrate=256000;c.parameters.useinbandfec=1;c.parameters.stereo=0;c.parameters.maxplaybackrate=48000}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
     // counter callGen is incremented by every endCall call. If it changed, bail.
@@ -431,7 +431,7 @@ async function startCall(){
     // endCall/disconnectRoom may have run during a nested await; if pc is gone bail.
     if(!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
-    try{remoteAudio.volume=0.8}catch{};
+    try{remoteAudio.volume=0.8}catch{};volumeSlider.value=80;volumeSlider.hidden=false;
     setParticipant(participantYou,true);logCallEvent('You joined the call');
     playSound('ring');try{send({t:'call-ring'})}catch{}
     callStatus.textContent='Voice live';callStatus.className='call-status live';
@@ -459,7 +459,7 @@ function endCall(silent){
   // null the srcObject and ontrack never fires again for the same transceiver,
   // permanently killing audio for the session.
   callActive=false;micMuted=false;
-  callBtn.textContent='🎙 Start voice';muteBtn.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
+  callBtn.textContent='🎙 Start voice';muteBtn.hidden=true;volumeSlider.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
   if(!silent){callBtn.disabled=!pc;try{send({t:'call-end'})}catch{}}
 }
 function toggleMute(){
@@ -470,6 +470,7 @@ function toggleMute(){
 }
 callBtn.onclick=()=>{if(callActive)endCall(false);else{try{remoteAudio.muted=false;remoteAudio.play()}catch{};setupPermanentAudioSink();startCall()}};
 muteBtn.onclick=toggleMute;
+volumeSlider.oninput=()=>{const v=parseInt(volumeSlider.value)/100;try{remoteAudio.volume=v}catch{}};
 
 // --- Screen share -------------------------------------------------------------
 // Either peer can start/stop screen share, so either peer can drive a
