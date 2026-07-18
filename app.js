@@ -151,10 +151,7 @@ function patchVideoSdp(sdp){
     let section=m;
     section=section.replace(/\nb=AS:\d+/g,'');
     section=section.replace(/\na=x-google-(?:min|max)-bitrate:\d+/g,'');
-    // Remove transport-cc lines from video m-section to prevent bandwidth estimation
-    section=section.replace(/\na=extmap:\d+ http:\/\/www\.ietf\.org\/id\/draft-holmer-rmcat-transport-wide-cc-extensions-01/g,'');
-    section=section.replace(/\na=rtcp-fb:\d+ transport-cc/g,'');
-    return section+'a=x-google-min-bitrate:5000\na=x-google-max-bitrate:50000\n';
+    return section+'a=x-google-min-bitrate:2000\na=x-google-max-bitrate:50000\n';
   });
 }
 function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
@@ -532,7 +529,7 @@ async function startScreenShare(){
     // Prefer AV1 then VP9 then VP8 codec order
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
     // Set extreme bitrate on the video sender to minimize compression artifacts
-    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=25_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p);setTimeout(async()=>{try{if(sender&&sender.track){const p2=sender.getParameters();if(p2&&p2.encodings){p2.degradationPreference='maintain-framerate';await sender.setParameters(p2)}}}catch{}},3000)}}catch(e){console.warn('video bitrate:',e)}
+    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=15_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
@@ -562,10 +559,11 @@ async function stopScreenShare(fromEnd){
 }
 screenBtn.onclick=()=>{if(screenActive)stopScreenShare();else startScreenShare()};
 screenPreset.onchange=()=>{if(screenActive){stopScreenShare();startScreenShare()}};
-// Double-click the remote screen to toggle fullscreen (via IPC if available, else DOM).
-remoteScreen.ondblclick=()=>{if(window.pairEnv?.toggleFullscreen){window.pairEnv.toggleFullscreen()}else if(!document.fullscreenElement){document.documentElement.requestFullscreen()}else{document.exitFullscreen()}};
-// Fullscreen overlay button on the remote screen.
-const fsBtn=document.createElement('button');fsBtn.className='fs-btn hidden';fsBtn.textContent='⛶ Fullscreen';fsBtn.onclick=()=>{if(window.pairEnv?.toggleFullscreen){window.pairEnv.toggleFullscreen()}else if(!document.fullscreenElement){document.documentElement.requestFullscreen()}else{document.exitFullscreen()}};remoteScreen.parentElement.appendChild(fsBtn);const obs=new MutationObserver(()=>{fsBtn.classList.toggle('hidden',remoteScreen.hidden)});obs.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});
+function toggleRemoteFs(){const is=remoteScreen.classList.toggle('fs');fsBtn.textContent=is?'✕ Exit fullscreen':'⛶ Fullscreen'}
+remoteScreen.ondblclick=toggleRemoteFs;
+const fsBtn=document.createElement('button');fsBtn.className='fs-btn hidden';fsBtn.textContent='⛶ Fullscreen';fsBtn.onclick=toggleRemoteFs;remoteScreen.parentElement.appendChild(fsBtn);const obs=new MutationObserver(()=>{fsBtn.classList.toggle('hidden',remoteScreen.hidden)});obs.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});
+// Escape key exits CSS fullscreen.
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&remoteScreen.classList.contains('fs'))toggleRemoteFs()});
 
 // Auto-update banner. Only wires up when running inside the Pair app
 // (window.pairEnv is exposed by preload.js). Browsers ignore this block.
