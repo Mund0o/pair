@@ -524,7 +524,7 @@ async function startScreenShare(){
     logCallEvent('You started screen sharing');
     track.onended=()=>{if(screenActive)stopScreenShare()};
     await renegotiate();if(gen!==screenGen)return;
-  }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
+  }catch(e){screenStatus.textContent='Share failed: '+(e.message||e);logCallEvent('Screen share error: '+e.message)}
 }
 async function stopScreenShare(fromEnd){
   if(!screenActive&&!fromEnd)return;
