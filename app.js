@@ -1,6 +1,7 @@
 /* Pair: manual-signaling, two-person P2P chat with application-level E2EE. */
-const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$('#signalIn'),statusText=$('#statusText'),messages=$('#messages'),messageForm=$('#messageForm'),messageInput=$('#messageInput'),fileInput=$('#fileInput'),chooseFiles=$('#chooseFiles'),transfers=$('#transfers'),pairHint=$('#pairHint'),participantYou=$('#participantYou'),participantFriend=$('#participantFriend'),voiceLog=$('#voiceLog');
+const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$('#signalIn'),statusText=$('#statusText'),messages=$('#messages'),messageForm=$('#messageForm'),messageInput=$('#messageInput'),fileInput=$('#fileInput'),chooseFiles=$('#chooseFiles'),transfers=$('#transfers'),pairHint=$('#pairHint'),participantYou=$('#participantYou'),participantFriend=$('#participantFriend'),voiceLog=$('#voiceLog'),screenBtn=$('#screenBtn'),screenPreset=$('#screenPreset'),screenStatus=$('#screenStatus'),screenPreview=$('#screenPreview'),remoteScreen=$('#remoteScreen');
 let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promise.resolve();let CHUNK=1024*1024;const MAX=120*1024**3;
+const SCREEN_PRESETS={'480p30':{width:{ideal:854,max:854},height:{ideal:480,max:480},frameRate:{ideal:30,max:30}},'720p30':{width:{ideal:1280,max:1280},height:{ideal:720,max:720},frameRate:{ideal:30,max:30}},'720p60':{width:{ideal:1280,max:1280},height:{ideal:720,max:720},frameRate:{ideal:60,max:60}},'1080p30':{width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:30,max:30}},'1080p60':{width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:60,max:60}},'1440p60':{width:{ideal:2560,max:2560},height:{ideal:1440,max:1440},frameRate:{ideal:60,max:60}},'4k60':{width:{ideal:3840,max:3840},height:{ideal:2160,max:2160},frameRate:{ideal:60,max:60}}};
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
 let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0;
@@ -10,6 +11,7 @@ let audioTransceiver=null;
 // Per-connection sound flags so the chimes don't double/triple: chat+files both
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
 let connectSoundDone=false,friendLeftNotified=false;
+let screenTransceiver=null,screenActive=false,screenStream=null,screenGen=0;
 const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio');
 // Lightweight synth sound effects via Web Audio (no asset files needed). Each
 // call lazily creates/resumes the AudioContext so it works after a user gesture
@@ -79,7 +81,7 @@ async function seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));c
 async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(o.iv)},sharedKey,new Uint8Array(o.data)))}
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
 function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}function addMessage(text,mine=false){$('.empty')?.remove();const el=document.createElement('div');el.className='message '+(mine?'mine':'');el.innerHTML='<div class="bubble"></div><div class="meta">'+(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+'</div>';el.querySelector('.bubble').textContent=text;messages.append(el);messages.scrollTop=messages.scrollHeight}
-function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));      else if(o.t==='call-ring'){setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
+function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));      else if(o.t==='call-ring'){setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}else if(o.t==='screen-start'){logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){logCallEvent('Friend stopped screen sharing');screenStatus.textContent='Not sharing';}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 
@@ -117,8 +119,12 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   // even after endCall nulls its track and the receiver track is momentarily
   // unavailable — which would otherwise fall through to a second m-line.
   try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch{audioTransceiver=null}
+  // Pre-negotiate a video transceiver for screen sharing (no track attached yet).
+  // Both sides create it inactive so the m-line exists in the SDP without sending.
+  // When the user shares, replaceTrack starts the flow — no renegotiation needed.
+  try{screenTransceiver=pc.addTransceiver('video',{direction:'sendrecv'});screenTransceiver.setDirection('sendrecv');const caps=RTCRtpSender.getCapabilities('video');if(caps){const codecs=[];const prefer=codec=>caps.codecs.findIndex(c=>c.mimeType===codec);['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const idx=prefer(mt);if(idx>=0)codecs.push(caps.codecs[idx])});if(codecs.length>0)try{screenTransceiver.setCodecPreferences(codecs)}catch{}}}catch{screenTransceiver=null}
   let gestureGuard=false;
-  pc.ontrack=e=>{if(e.track.kind==='audio'){try{audioTransceiver=e.transceiver;if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}catch{}}};
+  pc.ontrack=e=>{try{if(e.track.kind==='audio'){audioTransceiver=e.transceiver;if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -322,7 +328,7 @@ async function automaticPair(kind){
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
-function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.onclose=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};
+function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.onclose=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};try{remoteScreen.srcObject=null}catch{};remoteScreen.hidden=true;screenActive=false;screenStream=null;screenTransceiver=null;
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
@@ -392,6 +398,7 @@ async function startCall(){
 // from a disconnect.
 function endCall(silent){
   if(!silent){setParticipant(participantYou,false);logCallEvent('You left the call')}
+  if(screenActive)stopScreenShare(true);
   callGen++;
   if(callTimerId){clearInterval(callTimerId);callTimerId=null}
   callTimerEl.textContent='';
@@ -418,6 +425,49 @@ function toggleMute(){
 }
 callBtn.onclick=()=>{if(callActive)endCall(false);else startCall()};
 muteBtn.onclick=toggleMute;
+
+// --- Screen share -------------------------------------------------------------
+async function startScreenShare(){
+  if(screenActive||!pc)return;
+  const gen=++screenGen;
+  try{
+    const preset=SCREEN_PRESETS[screenPreset.value];
+    const constraints=preset?{video:{...preset}}:{video:true};
+    constraints.video.cursor='always';
+    const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
+    if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
+    screenStream=stream;
+    const track=stream.getVideoTracks()[0];
+    if(!track){stream.getTracks().forEach(t=>t.stop());return}
+    // Use the pre-negotiated video transceiver's sender
+    const tr=screenTransceiver&&screenTransceiver.mid?screenTransceiver
+      :pc.getTransceivers().find(t=>t.mid&&t.kind==='video')
+      ||screenTransceiver
+      ||pc.getTransceivers().find(t=>t.kind==='video');
+    const sender=tr?tr.sender:null;
+    if(!sender){stream.getTracks().forEach(t=>t.stop());return}
+    try{await sender.replaceTrack(track)}catch{stream.getTracks().forEach(t=>t.stop());return}
+    if(gen!==screenGen||!pc){try{sender.replaceTrack(null)}catch{};stream.getTracks().forEach(t=>t.stop());return}
+    screenActive=true;
+    screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
+    screenBtn.textContent='⏹ Stop Sharing';screenStatus.textContent='Sharing';
+    try{send({t:'screen-start'})}catch{};
+    logCallEvent('You started screen sharing');
+    track.onended=()=>{if(screenActive)stopScreenShare()};
+  }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
+}
+function stopScreenShare(fromEnd){
+  if(!screenActive&&!fromEnd)return;
+  screenGen++;
+  screenActive=false;
+  if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null}
+  if(pc){try{pc.getSenders().forEach(s=>{if(s.track&&s.track.kind==='video'){try{s.replaceTrack(null)}catch{}}})}catch{}}
+  screenPreview.srcObject=null;screenPreview.hidden=true;
+  screenBtn.textContent='🖥 Share Screen';screenBtn.disabled=!pc;
+  if(!fromEnd){screenStatus.textContent='Not sharing';try{send({t:'screen-end'})}catch{};logCallEvent('You stopped screen sharing')}
+}
+screenBtn.onclick=()=>{if(screenActive)stopScreenShare();else startScreenShare()};
+screenPreset.onchange=()=>{if(screenActive){stopScreenShare();startScreenShare()}};
 
 // Auto-update banner. Only wires up when running inside the Pair app
 // (window.pairEnv is exposed by preload.js). Browsers ignore this block.

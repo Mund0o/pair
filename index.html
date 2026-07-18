@@ -48,6 +48,26 @@
             <button id="muteBtn" hidden>🔇 Mute mic</button>
             <span id="callStatus" class="call-status">Voice off</span>
           </div>
+          <div class="screen-section">
+            <div class="screen-controls">
+              <button id="screenBtn" disabled>🖥 Share Screen</button>
+              <select id="screenPreset" class="preset-select" disabled>
+                <option value="1080p30">1080p 30fps</option>
+                <option value="1080p60">1080p 60fps</option>
+                <option value="720p60">720p 60fps</option>
+                <option value="720p30">720p 30fps</option>
+                <option value="480p30">480p 30fps</option>
+                <option value="1440p60">1440p 60fps</option>
+                <option value="4k60">4K 60fps</option>
+                <option value="custom">Custom</option>
+              </select>
+              <span id="screenStatus" class="screen-status">Not sharing</span>
+            </div>
+            <div class="screen-videos">
+              <video id="screenPreview" class="screen-preview" muted playsinline hidden></video>
+              <video id="remoteScreen" class="remote-screen" playsinline hidden></video>
+            </div>
+          </div>
           <div id="voiceLog" class="voice-log"></div>
         </div>
       </section>

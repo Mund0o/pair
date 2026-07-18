@@ -1,7 +1,7 @@
 {
-  "version": "1.0.23",
-  "notes": "Update available.",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.23/Pair.Setup.1.0.23.exe",
-  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.23/Pair.Setup.1.0.23.exe.blockmap",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.23/pair-p2p-1.0.23.tar.gz"
+  "version": "1.0.24",
+  "notes": "Screen share with AV1/VP9/VP8 codecs, multi-preset quality (480p–4K), custom mode.",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.24/Pair.Setup.1.0.24.exe",
+  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.24/Pair.Setup.1.0.24.exe.blockmap",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.24/pair-p2p-1.0.24.tar.gz"
 }
