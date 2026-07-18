@@ -385,9 +385,11 @@ async function startCall(){
     localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     if(!pc){localStream.getTracks().forEach(t=>t.stop());localStream=null;return}
     const track=localStream.getAudioTracks()[0];
-    const tr=pc.getTransceivers().find(t=>t.kind==='audio');
+    let tr=pc.getTransceivers().find(t=>t.kind==='audio');
+    if(!tr){try{tr=pc.addTransceiver('audio',{direction:'sendrecv'})}catch{}}
+    if(!tr){tr=audioTransceiver}
     const sender=tr?tr.sender:null;
-    if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
+    if(!sender){const m='No audio sender (transceivers:'+pc.getTransceivers().length+' kind:'+(tr?tr.kind:'?')+' mid:'+(tr?tr.mid:'?')+')';try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent=m;callStatus.className='call-status';return}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
