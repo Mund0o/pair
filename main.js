@@ -222,17 +222,24 @@ function startNativeCapture(win) {
   const addon = loadNativeCapture();
   if (!addon) { win.webContents.send('pair:captureError', 'Addon not built'); return; }
   if (addon._running) return;
+  console.log('native capture: starting...');
+  let cbCount=0;
   addon.start(
     (buf, frames) => {
-      // Clean audio data from native addon → send to renderer
-      if (win && !win.isDestroyed()) win.webContents.send('pair:cleanAudio', buf, frames);
+      cbCount++;
+      if (cbCount%50===0) console.log('native capture: data cb #'+cbCount+' frames='+frames);
+      if (win && !win.isDestroyed()) {
+        try { win.webContents.send('pair:cleanAudio', buf, frames); } catch(e) { console.warn('send cleanAudio err:', e.message); }
+      }
     },
     (errMsg) => {
+      console.warn('native capture err:', errMsg);
       if (win && !win.isDestroyed()) win.webContents.send('pair:captureError', errMsg);
     }
   );
   addon._running = true;
   const fmt = addon.getFormat();
+  console.log('native capture: started, format=',JSON.stringify(fmt));
   if (win && !win.isDestroyed()) win.webContents.send('pair:captureFormat', fmt);
 }
 function stopNativeCapture() {
@@ -242,13 +249,18 @@ function stopNativeCapture() {
   addon._running = false;
 }
 ipcMain.on('pair:startCapture', (event) => {
+  console.log('native capture: IPC startCapture');
   startNativeCapture(event.sender);
 });
 ipcMain.on('pair:stopCapture', () => {
+  console.log('native capture: IPC stopCapture');
   stopNativeCapture();
 });
+let refCount=0;
 ipcMain.on('pair:captureRef', (_event, buf) => {
+  refCount++;
+  if(refCount%50===0)console.log('native capture: ref #'+refCount+' bytes='+(buf?.byteLength||buf?.length));
   const addon = nativeCapture;
-  if (!addon || !addon._running) return;
+  if (!addon || !addon._running) { if(refCount===1)console.warn('native capture: ref sent but addon not running'); return; }
   try { addon.pushReference(buf); } catch (e) { console.warn('pushReference error:', e); }
 });

@@ -517,9 +517,10 @@ async function renegotiate(){
 // Pair's voice (the reference) to prevent echo, outputs clean track.
 async function setupNativeScreenCapture(){
   const refStream=remoteAudio.srcObject;
+  console.log('native capture: refStream=',!!refStream,refStream?.getAudioTracks().length);
   if(!refStream||!refStream.getAudioTracks().length)return null;
-  // Output pipeline: ScriptProcessorNode injects clean samples from ring buffer → MediaStreamDestination → track
   screenOutCtx=new AudioContext();if(screenOutCtx.state==='suspended')await screenOutCtx.resume();
+  console.log('native capture: outCtx state=',screenOutCtx.state);
   screenOutDest=screenOutCtx.createMediaStreamDestination();
   screenOutDest.channelCount=1;
   screenCleanBuf=new Float32Array(480000);
@@ -532,30 +533,36 @@ async function setupNativeScreenCapture(){
     }else out.fill(0);
   };
   screenOutNode.connect(screenOutDest);
-  // Reference pipeline: capture Pair's voice from remoteAudio → send to native addon
-  // Must have 1 output channel so onaudioprocess fires. Route to muted destination.
   screenRefCtx=new AudioContext();if(screenRefCtx.state==='suspended')await screenRefCtx.resume();
+  console.log('native capture: refCtx state=',screenRefCtx.state);
   const refSource=screenRefCtx.createMediaStreamSource(refStream);
   screenRefNode=screenRefCtx.createScriptProcessor(bufSize,1,1);
+  let refCount=0;
   screenRefNode.onaudioprocess=e=>{
+    refCount++;
+    if(refCount%10===0)console.log('native capture: ref callback #'+refCount);
     const inData=e.inputBuffer.getChannelData(0);
-    if(window.pairCapture)try{window.pairCapture.pushReference(inData.buffer.slice(inData.byteOffset,inData.byteOffset+inData.byteLength))}catch{}
+    if(window.pairCapture)try{window.pairCapture.pushReference(inData.buffer.slice(inData.byteOffset,inData.byteOffset+inData.byteLength))}catch(err){console.warn('pushReference err:',err)}
   };
   const refMute=screenRefCtx.createGain();refMute.gain.value=0;
   screenRefNode.connect(refMute);refMute.connect(screenRefCtx.destination);
   refSource.connect(screenRefNode);
-  // Register clean audio receiver
+  let cleanCount=0;
   const unsub=window.pairCapture.onCleanAudio((buf,frames)=>{
+    cleanCount++;
+    if(cleanCount%10===0)console.log('native capture: clean callback #'+cleanCount,'frames:',frames,'avail:',screenCleanAvail);
     const data=new Float32Array(buf);
     for(let i=0;i<data.length&&screenCleanAvail<screenCleanBuf.length;i++){screenCleanBuf[screenCleanWP]=data[i];screenCleanWP=(screenCleanWP+1)%screenCleanBuf.length;screenCleanAvail++}
   });
   const unsubErr=window.pairCapture.onError(msg=>{console.warn('capture err:',msg)});
   screenCaptureCleanup=()=>{try{unsub()}catch{};try{unsubErr()}catch{}};
-  // Start native capture after a brief delay to let reference start flowing
   await new Promise(r=>setTimeout(r,200));
   window.pairCapture.start();
+  console.log('native capture: started');
   screenNative=true;
-  return screenOutDest.stream.getAudioTracks()[0];
+  const t=screenOutDest.stream.getAudioTracks()[0];
+  console.log('native capture: returns track=',!!t,t?.enabled,t?.kind);
+  return t;
 }
 function cleanupNativeScreenCapture(){
   screenNative=false;
