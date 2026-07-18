@@ -1,6 +1,6 @@
 {
-"version": "1.0.27",
-  "notes": "Fix voice: add fallback addTransceiver + diagnostics in callStatus so you see the state without DevTools.",
+  "version": "1.0.27",
+  "notes": "Update available.",
   "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.27/Pair.Setup.1.0.27.exe",
   "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.27/Pair.Setup.1.0.27.exe.blockmap",
   "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.27/pair-p2p-1.0.27.tar.gz"
