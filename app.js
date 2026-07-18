@@ -126,10 +126,10 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   // reference so startCall always reuses THIS transceiver (never addTransceiver),
   // even after endCall nulls its track and the receiver track is momentarily
   // unavailable — which would otherwise fall through to a second m-line.
-  try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch(e){console.warn('setupPeer audio addTransceiver failed:',e);pairHint.textContent='Audio transceiver failed: '+(e&&e.message||e);audioTransceiver=null}
-  pairHint.textContent='pc transceivers: '+pc.getTransceivers().length+' audioTransceiver.sender='+(audioTransceiver?'ok':'null');
+  try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});}catch(e){console.warn('setupPeer audio addTransceiver failed:',e);pairHint.textContent='Audio transceiver failed: '+(e&&e.message||e);audioTransceiver=null}
+  logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok':'null'));
   let gestureGuard=false;
-  pc.ontrack=e=>{pairHint.textContent='ontrack: kind='+e.track.kind;try{if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
+  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -319,11 +319,14 @@ async function automaticPair(kind){
       if(remote.kind==='offer'&&role==='join'){
         setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;
         await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;await derive(kp,remote.pub);if(!pc)return;
+        logCallEvent('Diag: before createAnswer transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.kind==='audio').direction):'null'));
         await pc.setLocalDescription(await pc.createAnswer());if(!pc)return;await waitIce();if(!signaling)return;
         signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
         openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'
       }else if(remote.kind==='answer'&&role==='host'){
+        logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.kind==='audio').direction):'null'));
         await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;await derive(pc._kp,remote.pub);
+        logCallEvent('Diag: after setRD(answer)');
         openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
       }else if(remote.kind==='reneg-offer'){
         // Either peer can initiate screen share, so both roles must be able to
@@ -389,7 +392,7 @@ async function startCall(){
     const allTransceivers=pc.getTransceivers();
     const tr=audioTransceiver||allTransceivers.find(t=>t.kind==='audio')||(function(){try{return pc.addTransceiver('audio',{direction:'sendrecv'})}catch{return null}})();
     const sender=tr?tr.sender:null;
-    pairHint.textContent='startCall: transceivers='+allTransceivers.length+' audioTr='+(tr?'mid:'+tr.mid+' dir:'+tr.direction:'null')+' sender='+(sender?'ok':'null');
+    logCallEvent('Diag: startCall transceivers='+allTransceivers.length+' audioTr='+(tr?'ok:dir='+tr.direction:'null')+' sender='+(sender?'ok':'null'));
     if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
