@@ -146,14 +146,15 @@ function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.in
 // Patch video m-lines with max bandwidth (200 Mbps) and x-google-max-bitrate
 // to override Chrome's congestion-control bitrate clamping.
 function patchVideoSdp(sdp){
-  // Normalize line endings, then replace b=AS: in every video m= section
-  // and add/update x-google-max-bitrate at the end of each video section.
   sdp=sdp.replace(/\r\n/g,'\n');
   return sdp.replace(/^m=video .*\n(?:[^m].*\n)*/gm,m=>{
     let section=m;
-    section=section.replace(/\nb=AS:\d+/g,'\nb=AS:200000');
+    // Remove any b=AS: lines (unlimited bandwidth)
+    section=section.replace(/\nb=AS:\d+/g,'');
+    // Remove any existing x-google bitrate lines
     section=section.replace(/\na=x-google-(?:min|max)-bitrate:\d+/g,'');
-    return section+'a=x-google-max-bitrate:200000\n';
+    // Set encoder bitrate range for low latency
+    return section+'a=x-google-min-bitrate:50000\na=x-google-max-bitrate:200000\n';
   });
 }
 function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
@@ -531,7 +532,7 @@ async function startScreenShare(){
     // Prefer AV1 then VP9 then VP8 codec order
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
     // Set extreme bitrate on the video sender to minimize compression artifacts
-    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=200_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
+    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=50_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p);setTimeout(async()=>{try{if(sender&&sender.track){const p2=sender.getParameters();if(p2&&p2.encodings){p2.degradationPreference='maintain-framerate';await sender.setParameters(p2)}}}catch{}},3000)}}catch(e){console.warn('video bitrate:',e)}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
@@ -561,8 +562,8 @@ async function stopScreenShare(fromEnd){
 }
 screenBtn.onclick=()=>{if(screenActive)stopScreenShare();else startScreenShare()};
 screenPreset.onchange=()=>{if(screenActive){stopScreenShare();startScreenShare()}};
-// Double-click the remote screen to toggle fullscreen.
-remoteScreen.ondblclick=()=>{if(!document.fullscreenElement){document.documentElement.requestFullscreen()}else{document.exitFullscreen()}};
+// Double-click the remote screen to toggle fullscreen (via IPC if available, else DOM).
+remoteScreen.ondblclick=()=>{if(window.pairEnv?.toggleFullscreen){window.pairEnv.toggleFullscreen()}else if(!document.fullscreenElement){document.documentElement.requestFullscreen()}else{document.exitFullscreen()}};
 
 // Auto-update banner. Only wires up when running inside the Pair app
 // (window.pairEnv is exposed by preload.js). Browsers ignore this block.

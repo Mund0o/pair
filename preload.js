@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('pairSettings', {
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: os.platform(),
   isApp: true,
+  toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
   // Called once with a callback that fires when an update is available.
   onUpdate: cb => {
     if (typeof cb !== 'function') { console.warn('onUpdate requires a function'); return () => {}; }

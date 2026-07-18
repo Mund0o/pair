@@ -1,5 +1,7 @@
 const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, screen } = require('electron');
 
+let mainWin = null;
+
 // Enable hardware-accelerated video encode/decode for smoother screen sharing.
 app.commandLine.appendSwitch('enable-accelerated-video-encode');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
@@ -136,9 +138,10 @@ ipcMain.on('pair:installUpdate', () => performInstall());
 // signaling server once, and updates use that same host. Start (or restart) the
 // check loop with that feed as soon as we receive it.
 ipcMain.on('pair:setFeed', (_e, url) => { if (typeof url === 'string') startAutoUpdater(url.replace(/^ws:/,'http:')); });
+ipcMain.on('pair:toggleFullscreen', () => { if (mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });
 
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWin = new BrowserWindow({
     width: 1180,
     height: 820,
     minWidth: 860,
@@ -153,7 +156,7 @@ function createWindow() {
     }
   });
 
-  win.loadFile(path.join(__dirname, 'index.html'));
+  mainWin.loadFile(path.join(__dirname, 'index.html'));
 }
 
 app.whenReady().then(() => {
