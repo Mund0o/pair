@@ -72,7 +72,7 @@ const enc=new TextEncoder(),dec=new TextDecoder();
 function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
 function cleanSignal(s){return JSON.parse(atob(s.trim()))}function makeSignal(o){return btoa(JSON.stringify(o))}
 async function keyPair(){return crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveBits'])}async function exportPub(k){return crypto.subtle.exportKey('jwk',k)}async function importPub(j){return crypto.subtle.importKey('jwk',j,{name:'ECDH',namedCurve:'P-256'},false,[])}
-async function derive(local,remote){const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);const fp=await crypto.subtle.digest('SHA-256',bits);$('#fingerprint').textContent='Session key fingerprint: '+[...new Uint8Array(fp)].slice(0,4).map(b=>b.toString(16).padStart(2,'0')).join('');sharedKey=await crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt']);}
+let deriveGen=0;async function derive(local,remote){const gen=++deriveGen;const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);const fp=await crypto.subtle.digest('SHA-256',bits);$('#fingerprint').textContent='Session key fingerprint: '+[...new Uint8Array(fp)].slice(0,4).map(b=>b.toString(16).padStart(2,'0')).join('');if(gen!==deriveGen)return;const key=await crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt']);if(gen===deriveGen)sharedKey=key;}
 async function seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));const data=typeof value==='string'?enc.encode(value):value;const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},sharedKey,data);return {iv:[...iv],data:[...new Uint8Array(ct)]}}async function sealBytes(value){const iv=crypto.getRandomValues(new Uint8Array(12));const data=await crypto.subtle.encrypt({name:'AES-GCM',iv},sharedKey,value);return {iv:[...iv],data}}
 async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(o.iv)},sharedKey,new Uint8Array(o.data)))}
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
@@ -148,15 +148,15 @@ async function sendFile(file,retryId){try{if(file.size>MAX)return alert('This fi
   let preloadedEnd=Math.min(CHUNK,file.size);
   let preloaded=file.size>0?file.slice(preloadedStart,preloadedEnd).arrayBuffer():null;
   let nextOfs=preloadedEnd;  // byte offset of the NEXT unread chunk
-  const emitPct=(done,pct)=>{el.querySelector('i').style.width=Math.min(100,done/file.size*100)+'%';el.querySelector('.transfer-status').textContent=pct+'%';updateStats(el,done,file.size,t0);const now=Date.now();if((pct!==lastPctSent&&now-lastPeerSent>250)||now-lastPeerSent>500){lastPctSent=pct;lastPeerSent=now;try{safeSend(JSON.stringify({t:'progress',seq,p:pct}))}catch{}}};
-  const pump=async()=>{while(preloaded){const bus=fileBus();if(!bus)throw new Error('disconnected');while(inflight>=SEND_WINDOW){await awaitBusDrain(bus);if(ctrl.abort)return}
+    const emitPct=(done,pct)=>{el.querySelector('i').style.width=Math.min(100,done/file.size*100)+'%';el.querySelector('.transfer-status').textContent=pct+'%';updateStats(el,done,file.size,t0);const now=Date.now();if((pct!==lastPctSent&&now-lastPeerSent>250)||now-lastPeerSent>500){lastPctSent=pct;lastPeerSent=now;safeSend(JSON.stringify({t:'progress',seq,p:pct})).catch(()=>{})}};
+  const pump=async()=>{while(preloaded){const bus=fileBus();if(!bus)throw new Error('disconnected');while(inflight>=SEND_WINDOW){await awaitBusDrain(bus);if(ctrl.abort)throw new Error('Cancelled')}
     // Start reading the NEXT chunk now, in parallel with encrypt+send of this one.
     const readStart=nextOfs;
     const readEnd=Math.min(readStart+CHUNK,file.size);
     const nextRead=readStart<file.size?file.slice(readStart,readEnd).arrayBuffer():null;
     nextOfs=readEnd;
     // Encrypt+pack+send the PREVIOUSLY pre-loaded chunk.
-    const raw=await preloaded;if(ctrl.abort)return;
+    const raw=await preloaded;if(ctrl.abort)throw new Error('Cancelled');
     const {iv,data}=await sealBytes(new Uint8Array(raw));
     const frame=packChunk(seq,preloadedStart,new Uint8Array(iv),new Uint8Array(data),preloadedEnd>=file.size);
     inflight+=frame.byteLength;
@@ -168,10 +168,10 @@ async function sendFile(file,retryId){try{if(file.size>MAX)return alert('This fi
     preloaded=nextRead;
     preloadedStart=readStart;
     preloadedEnd=readEnd;
-    if(pending.length%32===0)await Promise.race(pending.map(p=>p.catch(()=>{})))}}
+    if(pending.length%32===0)await Promise.race(pending.slice(-32).map(p=>p.catch(()=>{})))}}
   await pump();
   await Promise.all(pending);
-    if(!ctrl.abort){await safeSend(JSON.stringify({t:'end',seq}));el.querySelector('.transfer-status').textContent='Sent';el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';setPeerPct(el,100);cancelBtn.hidden=true}sendAbort.delete(seq);}catch(e){const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);if(!ctrl.abort)aw.reject(e)}sendAbort.delete(seq);if(ctrl.abort||(e&&e.message==='Cleared')||(e&&e.message==='disconnected')){el.querySelector('.transfer-status').textContent='Cancelled'}else if(e&&e.message==='rejected'){const s=el.querySelector('.transfer-status');s.textContent='Declined by friend';s.classList.add('declined')}else{const s=el.querySelector('.transfer-status');s.textContent='Failed: '+(e?.message||e);s.classList.add('failed')}el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';cancelBtn.hidden=true;retryBtn.hidden=false;retryBtn.onclick=()=>{el.remove();sendFile(file,seq);};try{await safeSend(JSON.stringify({t:'end',seq,cancelled:true}))}catch{}}outTransfers.delete(seq);}).catch(()=>{});}catch{}}
+    if(!ctrl.abort){await safeSend(JSON.stringify({t:'end',seq}));el.querySelector('.transfer-status').textContent='Sent';el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';setPeerPct(el,100);cancelBtn.hidden=true}sendAbort.delete(seq);}catch(e){const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);if(!ctrl.abort)aw.reject(e)}sendAbort.delete(seq);if(ctrl.abort||(e&&e.message==='Cleared')||(e&&e.message==='disconnected')){el.querySelector('.transfer-status').textContent='Cancelled'}else if(e&&e.message==='rejected'){const s=el.querySelector('.transfer-status');s.textContent='Declined by friend';s.classList.add('declined')}else{const s=el.querySelector('.transfer-status');s.textContent='Failed: '+(e?.message||e);s.classList.add('failed')}el.querySelector('.transfer-speed').textContent='';el.querySelector('.transfer-eta').textContent='';cancelBtn.hidden=true;retryBtn.hidden=false;retryBtn.onclick=()=>{el.remove();sendFile(file);};try{await safeSend(JSON.stringify({t:'end',seq,cancelled:true}))}catch{}}outTransfers.delete(seq);}).catch(()=>{});}catch{}}
 // Active incoming transfers, keyed by their seq (so multiple files in flight
 // are kept separate). Chunks carry seq in their frame header and route here.
 const activeTransfers=new Map();
@@ -291,8 +291,8 @@ async function automaticPair(kind){
   signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);
     if(message.type==='full'){pairHint.textContent='That room already has two people.';return}
     if(message.type==='peer-ready'&&role==='host'){
-      setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();
-      await pc.setLocalDescription(await pc.createOffer());await waitIce();
+      setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
+      await pc.setLocalDescription(await pc.createOffer());if(!pc)return;await waitIce();if(!signaling)return;
       signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
       openStreamRelay(address,room);pairHint.textContent='Offer sent. Connecting…';
       // If the friend never answers (wrong role, different room, or an old build
@@ -304,13 +304,13 @@ async function automaticPair(kind){
       // neither branch matches. Surface it instead of hanging.
       if(remote.kind==='offer'&&role==='host'){pairHint.textContent='Both of you clicked Host. One of you must click Leave, then that person clicks Join instead.';return}
       if(remote.kind==='offer'&&role==='join'){
-        setupPeer();const kp=await keyPair();pc._kp=kp;
-        await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});await derive(kp,remote.pub);
-        await pc.setLocalDescription(await pc.createAnswer());await waitIce();
+        setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;
+        await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;await derive(kp,remote.pub);if(!pc)return;
+        await pc.setLocalDescription(await pc.createAnswer());if(!pc)return;await waitIce();if(!signaling)return;
         signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
         openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'
       }else if(remote.kind==='answer'&&role==='host'){
-        await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});await derive(pc._kp,remote.pub);
+        await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;await derive(pc._kp,remote.pub);
         openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
       }
     }
@@ -320,13 +320,13 @@ async function automaticPair(kind){
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
-function disconnectRoom(){try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};
+function disconnectRoom(){let _pct=pc&&pc._connectTimer;if(_pct){clearTimeout(_pct);_pct=null}try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
   busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();
-  if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
-  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
+  sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
+  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;deriveGen++;setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 $('#leaveRoom').onclick=()=>disconnectRoom();
 // Clear-list button: tears down any in-flight transfers and empties the list.
 const clearBtn=$('#clearTransfers');
