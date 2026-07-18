@@ -1,3 +1,5 @@
+const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, screen } = require('electron');
+
 // Enable hardware-accelerated video encode/decode for smoother screen sharing.
 app.commandLine.appendSwitch('enable-accelerated-video-encode');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
@@ -5,8 +7,6 @@ app.commandLine.appendSwitch('enable-features', 'VaapiVideoDecoder,VaapiVideoEnc
 app.commandLine.appendSwitch('force-gpu-rasterization');
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
-
-const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 require('./server.js');
