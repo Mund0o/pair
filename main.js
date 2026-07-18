@@ -1,6 +1,13 @@
 const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, screen } = require('electron');
 
 let mainWin = null;
+let pendingSourceId = null;
+
+ipcMain.handle('pair:getSources', async () => {
+  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } });
+  return sources.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
+});
+ipcMain.on('pair:setPendingSource', (_e, id) => { pendingSourceId = id; });
 
 // Enable hardware-accelerated video encode/decode for smoother screen sharing.
 app.commandLine.appendSwitch('enable-accelerated-video-encode');
@@ -167,12 +174,18 @@ app.whenReady().then(() => {
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const useId = pendingSourceId;
+    pendingSourceId = null;
     desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 320, height: 240 } })
       .then(sources => {
         if (!sources.length) { callback({}); return }
-        const pd = screen.getPrimaryDisplay();
-        const src = sources.find(s => s.display_id === String(pd.id)) || sources.find(s => s.name === 'Entire Screen') || sources[0];
-        callback({ video: src, audio: request.audioRequested ? 'loopback' : undefined });
+        const src = useId ? sources.find(s => s.id === useId) : null;
+        if (!src) {
+          const pd = screen.getPrimaryDisplay();
+          callback({ video: sources.find(s => s.display_id === String(pd.id)) || sources.find(s => s.name === 'Entire Screen') || sources[0], audio: request.audioRequested ? 'loopback' : undefined });
+        } else {
+          callback({ video: src, audio: request.audioRequested ? 'loopback' : undefined });
+        }
       })
       .catch(e => { console.error('Display media request error:', e); callback({}) });
   });

@@ -139,7 +139,7 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   }catch(e){console.warn('Silent audio track failed, using addTransceiver:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null}}
   logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid:'null'));
   let gestureGuard=false;
-  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0.5;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
+  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){if(e.streams[0]&&e.streams[0].getVideoTracks().length>0){logCallEvent('Screen audio received');return}logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0.5;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=510000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=510000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('stereo'))m+='; stereo=0';if(!m.includes('sprop-stereo'))m+='; sprop-stereo=0';return m})}
@@ -514,18 +514,38 @@ async function renegotiate(){
 async function startScreenShare(){
   if(screenActive||!pc)return;
   const gen=++screenGen;
+  // Show source picker in Electron app (in browser getDisplayMedia shows native picker)
+  if(window.pairEnv?.getSources){
+    const sources=await window.pairEnv.getSources();
+    if(!sources.length||gen!==screenGen){screenStatus.textContent='No sources';return}
+    const id=await new Promise(resolve=>{
+      const o=document.createElement('div');o.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center';
+      const b=document.createElement('div');b.style.cssText='background:#2b2d31;border-radius:10px;padding:20px;max-width:640px;width:90%;max-height:80vh;overflow-y:auto;color:#f2f3f5';
+      b.innerHTML='<h3 style="margin:0 0 14px;font-size:16px">Select what to share</h3>';
+      const g=document.createElement('div');g.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px';
+      sources.forEach(s=>{const btn=document.createElement('button');btn.style.cssText='background:#1e1f22;border:1px solid #3f4147;border-radius:8px;padding:8px;cursor:pointer;text-align:center;font-size:12px;color:#f2f3f5';btn.innerHTML=`<img src="${s.thumbnail}" style="width:100%;border-radius:4px;display:block;margin-bottom:6px"><span>${s.name}</span>`;btn.onclick=()=>{resolve(s.id);o.remove()};g.appendChild(btn)});
+      const c=document.createElement('button');c.textContent='Cancel';c.style.cssText='margin-top:12px;background:#4e5058;border:0;border-radius:4px;padding:8px 16px;color:#f2f3f5;cursor:pointer;font-size:12px';c.onclick=()=>{resolve(null);o.remove()};
+      b.appendChild(g);b.appendChild(c);o.appendChild(b);document.body.appendChild(o);
+    });
+    if(!id||gen!==screenGen)return;
+    window.pairEnv.setPendingSource(id);
+  }
   try{
     const preset=SCREEN_PRESETS[screenPreset.value];
     const constraints=preset?{video:{...preset}}:{video:true};
     constraints.video.cursor='always';
+    constraints.audio=preset?{echoCancellation:false,autoGainControl:false,noiseSuppression:false}:true;
     const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
     screenStream=stream;
     const track=stream.getVideoTracks()[0];
     if(!track){stream.getTracks().forEach(t=>t.stop());return}
-    // Add the track dynamically — creates a new video transceiver
+    // Add the video track
     let sender;
     try{sender=pc.addTrack(track,stream)}catch{stream.getTracks().forEach(t=>t.stop());return}
+    // Add the audio track if present (system audio)
+    const audioTrack=stream.getAudioTracks()[0];
+    if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
     // Prefer AV1 then VP9 then VP8 codec order
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
