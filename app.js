@@ -145,7 +145,17 @@ async function waitIce(){if(pc.iceGatheringState==='complete')return;await new P
 function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=510000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=510000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('stereo'))m+='; stereo=0';if(!m.includes('sprop-stereo'))m+='; sprop-stereo=0';return m})}
 // Patch video m-lines with max bandwidth (200 Mbps) and x-google-max-bitrate
 // to override Chrome's congestion-control bitrate clamping.
-function patchVideoSdp(sdp){let i=0,out='',lines=sdp.split('\n');while(i<lines.length){const l=lines[i];if(/^m=video\s/.test(l)){out+=l+'\n';i++;while(i<lines.length&&!/^m=/.test(lines[i])){const c=lines[i];if(/^b=AS:/.test(c)){out+='b=AS:200000\n';i++}else if(/^a=x-google-(min|max)-bitrate:/.test(c)){i++}else{out+=c+'\n';i++}}out+='a=x-google-max-bitrate:200000\n'}else{out+=l+'\n';i++}}return out}
+function patchVideoSdp(sdp){
+  // Normalize line endings, then replace b=AS: in every video m= section
+  // and add/update x-google-max-bitrate at the end of each video section.
+  sdp=sdp.replace(/\r\n/g,'\n');
+  return sdp.replace(/^m=video .*\n(?:[^m].*\n)*/gm,m=>{
+    let section=m;
+    section=section.replace(/\nb=AS:\d+/g,'\nb=AS:200000');
+    section=section.replace(/\na=x-google-(?:min|max)-bitrate:\d+/g,'');
+    return section+'a=x-google-max-bitrate:200000\n';
+  });
+}
 function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
 $('#createAnswer').onclick=async()=>{try{if(pc)pc.close();role='answer';const remote=cleanSignal(signalIn.value);setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});await derive(kp,remote.pub);const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();signalOut.value=makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this answer back to the person who made the offer.'}catch(e){pairHint.textContent='Could not create answer: '+e.message}};
