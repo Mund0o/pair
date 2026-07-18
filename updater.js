@@ -22,7 +22,7 @@ function readFeedUrl() {
   if (process.env.PAIR_FEED) return process.env.PAIR_FEED.trim().replace(/\/$/, '');
   try {
     const file = path.join(os.homedir(), '.pair-update-url');
-    if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim().replace(/\/$/, '');
+    return fs.readFileSync(file, 'utf8').trim().replace(/\/$/, '');
   } catch {}
   return DEFAULT_FEED;
 }
@@ -60,10 +60,14 @@ function fetchUrl(url, { binary = false } = {}, depth = 0) {
 }
 
 function downloadInstaller(url, dest) {
+  const tmp = dest + '.tmp';
   return fetchUrl(url, { binary: true }).then(buf => {
     if (!buf || !buf.length) throw new Error('downloaded file is empty');
     return new Promise((resolve, reject) => {
-      fs.writeFile(dest, buf, err => err ? reject(err) : resolve(dest));
+      fs.writeFile(tmp, buf, err => {
+        if (err) return reject(err);
+        try { fs.renameSync(tmp, dest); resolve(dest); } catch (e) { try { fs.unlinkSync(tmp); } catch {} reject(e); }
+      });
     });
   });
 }
@@ -100,9 +104,13 @@ async function checkOnce(feedUrl) {
       pendingInstall = { path: dest };
     } catch (e) {
       console.log('[updater] download failed:', e.message);
+      try { if (win) win.webContents.send('update-available', {
+        platform: 'win32', version: manifest.version, stage: 'download-failed'
+      }); } catch {}
     }
   } else {
     // Linux (tar.gz): cannot self-install, just notify with a download link.
+    if (!manifest.linuxUrl) return;
     try { if (win) win.webContents.send('update-available', {
       platform: 'linux', version: manifest.version, notes: manifest.notes || '',
       url: manifest.linuxUrl, stage: 'link'
@@ -119,11 +127,9 @@ let checking = false;
 // Called by the renderer (Windows) when the user clicks "Restart to update".
 function performInstall() {
   if (!pendingInstall) return;
-  const p = pendingInstall.path;
-  pendingInstall = null;
-  // Opening the NSIS installer while the app is still running causes file-in-use
-  // errors, so quit first. NSIS then runs and replaces the app.
-  shell.openPath(p).then(err => { if (!err) app.quit(); else pendingInstall = p; });
+  // The before-quit handler launches the installer, so quit first. NSIS then
+  // runs and replaces the app while it is closed.
+  app.quit();
 }
 
 function startAutoUpdater(explicitFeed) {
@@ -138,14 +144,17 @@ function startAutoUpdater(explicitFeed) {
   if (timer) clearInterval(timer);
   if (!beforeQuitRegistered) {
     app.on('before-quit', () => {
-      if (pendingInstall) shell.openPath(pendingInstall.path);
-      pendingInstall = null;
+      if (pendingInstall) {
+        shell.openPath(pendingInstall.path).catch(e => console.log('[updater] failed to launch installer:', e));
+        pendingInstall = null;
+      }
     });
     beforeQuitRegistered = true;
   }
   // First check shortly after boot (let the window finish loading), then repeat.
-  initialTimer = setTimeout(() => checkOnce(feedUrl), 4000);
-  timer = setInterval(() => checkOnce(feedUrl), CHECK_INTERVAL);
+  const safeCheck = () => checkOnce(feedUrl).catch(e => console.log('[updater] check error:', e));
+  initialTimer = setTimeout(() => safeCheck(), 4000);
+  timer = setInterval(() => safeCheck(), CHECK_INTERVAL);
 }
 
 module.exports = { startAutoUpdater, performInstall };

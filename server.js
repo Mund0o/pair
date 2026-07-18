@@ -136,7 +136,7 @@ const httpServer = http.createServer((req, res) => {
     }
     const ext = path.extname(file).toLowerCase();
     res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
-    const rs=fs.createReadStream(file);rs.on('error',()=>{try{res.end()}catch{}});rs.pipe(res);
+    const rs=fs.createReadStream(file);rs.on('error',()=>{try{res.end()}catch{}});res.on('close',()=>rs.destroy());rs.pipe(res);
   } catch (e) {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('Error');

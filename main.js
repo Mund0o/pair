@@ -10,16 +10,14 @@ require('./server.js');
 let writeStream = null;
 let writeFailed = null;
 
-let streamClosing = false;
 let closePromise = null;
 function closeStream() {
   if (closePromise) return closePromise;
   if (!writeStream) return Promise.resolve();
-  streamClosing = true;
   const s = writeStream;
   writeStream = null;
   closePromise = new Promise(resolve => {
-    const done = () => { streamClosing = false; closePromise = null; resolve(); };
+    const done = () => { closePromise = null; resolve(); };
     s.once('close', done);
     s.once('error', done);
     s.destroy();
@@ -102,12 +100,17 @@ ipcMain.handle('pair:saveCancel', () => closeStream().then(() => true));
 // --- Settings persistence (sandboxed renderer can't rely on localStorage) ---
 // Writes/reads a small JSON file in the app's userData directory so room code
 // and signaling address survive restarts even in sandboxed Electron on file://.
-const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+// Defer app.getPath until first use (module-level call may throw before ready).
+let _sp = null;
+function sp() {
+  if (!_sp) _sp = path.join(app.getPath('userData'), 'settings.json');
+  return _sp;
+}
 function readSettings() {
-  try { return JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch { return {}; }
+  try { return JSON.parse(fs.readFileSync(sp(), 'utf8')); } catch { return {}; }
 }
 function writeSettings(obj) {
-  try { fs.writeFileSync(settingsPath, JSON.stringify(obj), 'utf8'); } catch {}
+  try { fs.writeFileSync(sp(), JSON.stringify(obj), 'utf8'); } catch {}
 }
 ipcMain.handle('pair:getSetting', (_e, key) => (readSettings())[key]);
 ipcMain.handle('pair:setSetting', (_e, key, value) => {
@@ -124,9 +127,7 @@ ipcMain.on('pair:installUpdate', () => performInstall());
 // lets auto-update work for a remote peer without manual config: they set the
 // signaling server once, and updates use that same host. Start (or restart) the
 // check loop with that feed as soon as we receive it.
-ipcMain.on('pair:setFeed', (_e, url) => { startAutoUpdater(String(url).replace(/^ws:/,'http:')); });
-
-app.on('window-all-closed', () => closeStream());
+ipcMain.on('pair:setFeed', (_e, url) => { if (typeof url === 'string') startAutoUpdater(url.replace(/^ws:/,'http:')); });
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -159,6 +160,7 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
+  await closeStream();
   if (process.platform !== 'darwin') app.quit();
 });

@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('pairEnv', {
   isApp: true,
   // Called once with a callback that fires when an update is available.
   onUpdate: cb => {
+    if (typeof cb !== 'function') { console.warn('onUpdate requires a function'); return () => {}; }
     const listener = (_e, info) => cb(info);
     ipcRenderer.on('update-available', listener);
     return () => ipcRenderer.removeListener('update-available', listener);
