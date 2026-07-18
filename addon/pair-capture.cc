@@ -2,7 +2,6 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
-#include <audiopolicy.h>
 #include <vector>
 #include <mutex>
 #include <thread>
@@ -12,13 +11,13 @@
 
 class Capture {
 public:
-  std::vector<float> refBuffer;
+  std::vector<float> refRing;
   std::mutex refMutex;
-  std::vector<float> delayLine;
-  size_t delayPos=0,refWritePos=0,refSize=0;
+  uint64_t refWritten=0;    // total ref samples written (monotonic, mod RING_SIZE)
   float estimatedGain=0.5f;
-  bool runningFlag=false,firstRef=true;
-  static constexpr size_t MAX_DELAY=96000;
+  int bestDelay=2048;       // initial ~43ms at 48kHz
+  bool runningFlag=false;
+  static constexpr int RING_SIZE=96000;  // 2s ring buffer
 
   IMMDeviceEnumerator* enumerator=nullptr;
   IMMDevice* device=nullptr;
@@ -30,7 +29,7 @@ public:
   std::thread captureThread;
   Napi::ThreadSafeFunction dataCb,errCb;
 
-  Capture():delayLine(MAX_DELAY,0.0f){}
+  Capture():refRing(RING_SIZE,0.0f){}
   ~Capture(){stop();cleanup();}
 
   void start(Napi::Function dataCbFn,Napi::Function errCbFn){
@@ -55,19 +54,15 @@ public:
 
   void pushRef(float* data,size_t frames){
     std::lock_guard<std::mutex> lk(refMutex);
-    refBuffer.resize(frames);
-    memcpy(refBuffer.data(),data,frames*sizeof(float));
-    refSize=frames;
-    refWritePos=0;
-    firstRef=true;
+    for(size_t i=0;i<frames;i++){
+      refRing[(refWritten+i)%RING_SIZE]=data[i];
+    }
+    refWritten+=frames;
   }
 
   Napi::Object getFormat(Napi::Env env){
     auto o=Napi::Object::New(env);
-    if(!mixFormat){
-      o.Set("available",Napi::Boolean::New(env,false));
-      return o;
-    }
+    if(!mixFormat){o.Set("available",Napi::Boolean::New(env,false));return o;}
     o.Set("sampleRate",Napi::Number::New(env,(double)mixFormat->nSamplesPerSec));
     o.Set("channels",Napi::Number::New(env,(double)mixFormat->nChannels));
     o.Set("bitsPerSample",Napi::Number::New(env,(double)mixFormat->wBitsPerSample));
@@ -119,42 +114,66 @@ private:
     audioClient->Stop();
   }
 
+  void updateDelay(float* captured,int frames,int sr){
+    if(refWritten<(uint64_t)(sr*0.05))return; // need at least 50ms of ref data
+    static int counter=0;
+    if(++counter%30!=0)return;
+
+    int maxD=std::min((int)(sr*0.15),RING_SIZE-frames-256);
+    int minD=(int)(sr*0.01);
+    if(minD<256)minD=256;
+    if(maxD<=minD)return;
+
+    float bestCorr=0;int bestD=bestDelay;
+    int n=std::min(frames,256);
+    for(int d=minD;d<maxD;d+=4){
+      float c=0,nc=0,nr=0;
+      for(int i=0;i<n;i++){
+        float cap=captured[i];
+        float ref=refRing[(refWritten-d+i)%RING_SIZE];
+        c+=cap*ref;nc+=cap*cap;nr+=ref*ref;
+      }
+      float denom=sqrtf(nc*nr);
+      if(denom>1e-10f&&c/denom>bestCorr){bestCorr=c/denom;bestD=d;}
+    }
+    if(bestCorr>0.3f)bestDelay=(bestDelay*3+bestD)/4;
+  }
+
   void process(BYTE* data,UINT32 frames){
     int ch=mixFormat->nChannels;
-    std::vector<float> clean(frames);
-    std::vector<float> refFrames(frames);
-    bool hasRef=false;
-    {
-      std::lock_guard<std::mutex> lk(refMutex);
-      if(refSize>0){
-        for(UINT32 i=0;i<frames;i++){refFrames[i]=refBuffer[refWritePos%refSize];refWritePos=(refWritePos+1)%refSize;}
-        hasRef=true;
-      }
-    }
+    int sr=(int)mixFormat->nSamplesPerSec;
+    std::vector<float> captured(frames);
     if(mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT){
       float* f=(float*)data;
-      for(UINT32 i=0;i<frames;i++){
-        float s=0;for(int c=0;c<ch;c++)s+=f[i*ch+c];s/=ch;
-        if(hasRef){
-          float r=refFrames[i];
-          float captured=s;
-          clean[i]=captured-estimatedGain*r;
-          if(fabsf(r)>0.0001f){float num=captured*r;float den=r*r+1e-10f;estimatedGain=0.9995f*estimatedGain+0.0005f*num/den;if(estimatedGain<0)estimatedGain=0;if(estimatedGain>1)estimatedGain=1;}
-        }else clean[i]=s;
-      }
+      for(UINT32 i=0;i<frames;i++){float s=0;for(int c=0;c<ch;c++)s+=f[i*ch+c];captured[i]=s/ch;}
+    }else if(mixFormat->wBitsPerSample==16){
+      INT16* ps=(INT16*)data;
+      for(UINT32 i=0;i<frames;i++){float s=0;for(int c=0;c<ch;c++)s+=ps[i*ch+c];captured[i]=s/(ch*32768.0f);}
     }else{
-      for(UINT32 i=0;i<frames;i++){
-        float s=0;
-        if(mixFormat->wBitsPerSample==16){INT16*ps=(INT16*)data;for(int c=0;c<ch;c++)s+=ps[i*ch+c];s/=ch*32768.0f;}
-        else if(mixFormat->wBitsPerSample==32){INT32*pl=(INT32*)data;for(int c=0;c<ch;c++)s+=pl[i*ch+c];s/=ch*2147483648.0f;}
-        if(hasRef){
-          float r=refFrames[i];
-          float captured=s;
-          clean[i]=captured-estimatedGain*r;
-          if(fabsf(r)>0.0001f){float num=captured*r;float den=r*r+1e-10f;estimatedGain=0.9995f*estimatedGain+0.0005f*num/den;if(estimatedGain<0)estimatedGain=0;if(estimatedGain>1)estimatedGain=1;}
-        }else clean[i]=s;
-      }
+      INT32* pl=(INT32*)data;
+      for(UINT32 i=0;i<frames;i++){float s=0;for(int c=0;c<ch;c++)s+=pl[i*ch+c];captured[i]=s/(ch*2147483648.0f);}
     }
+
+    int delay=bestDelay;
+    std::vector<float> clean(frames);
+    {
+      std::lock_guard<std::mutex> lk(refMutex);
+      if(refWritten>(uint64_t)(delay+frames)){
+        updateDelay(captured.data(),frames,sr);
+        delay=bestDelay;
+        for(UINT32 i=0;i<frames;i++){
+          float r=refRing[(refWritten-delay+i)%RING_SIZE];
+          float c=captured[i];
+          clean[i]=c-estimatedGain*r;
+          if(fabsf(r)>0.0001f){
+            float num=c*r,den=r*r+1e-10f;
+            estimatedGain=0.9995f*estimatedGain+0.0005f*num/den;
+            if(estimatedGain<0)estimatedGain=0;if(estimatedGain>1)estimatedGain=1;
+          }
+        }
+      }else memcpy(clean.data(),captured.data(),frames*sizeof(float));
+    }
+
     float* buf=new float[frames];
     memcpy(buf,clean.data(),frames*sizeof(float));
     UINT32 fCopy=frames;
@@ -182,26 +201,22 @@ private:
 };
 
 static Napi::Value Start(const Napi::CallbackInfo& info){
-  Napi::Env env=info.Env();
   auto* cap=static_cast<Capture*>(info.Data());
-  if(!info[0].IsFunction()||!info[1].IsFunction())throw Napi::Error::New(env,"args: dataCallback, errorCallback");
+  if(!info[0].IsFunction()||!info[1].IsFunction())throw Napi::Error::New(info.Env(),"args: dataCallback, errorCallback");
   cap->start(info[0].As<Napi::Function>(),info[1].As<Napi::Function>());
-  return env.Undefined();
+  return info.Env().Undefined();
 }
 static Napi::Value Stop(const Napi::CallbackInfo& info){
-  auto* cap=static_cast<Capture*>(info.Data());
-  cap->stop();
+  static_cast<Capture*>(info.Data())->stop();
   return info.Env().Undefined();
 }
 static Napi::Value PushRef(const Napi::CallbackInfo& info){
-  auto* cap=static_cast<Capture*>(info.Data());
   auto buf=info[0].As<Napi::Buffer<float>>();
-  cap->pushRef(buf.Data(),buf.Length());
+  static_cast<Capture*>(info.Data())->pushRef(buf.Data(),buf.Length());
   return info.Env().Undefined();
 }
 static Napi::Value GetFormat(const Napi::CallbackInfo& info){
-  auto* cap=static_cast<Capture*>(info.Data());
-  return cap->getFormat(info.Env());
+  return static_cast<Capture*>(info.Data())->getFormat(info.Env());
 }
 static Napi::Object Init(Napi::Env env,Napi::Object exports){
   auto* cap=new Capture();
@@ -209,9 +224,7 @@ static Napi::Object Init(Napi::Env env,Napi::Object exports){
   exports.Set("stop",Napi::Function::New(env,Stop,"stop",cap));
   exports.Set("pushReference",Napi::Function::New(env,PushRef,"pushReference",cap));
   exports.Set("getFormat",Napi::Function::New(env,GetFormat,"getFormat",cap));
-  // Clean up on module unload
-  auto cleanup=[](void* data){delete static_cast<Capture*>(data);};
-  napi_add_env_cleanup_hook(env,cleanup,cap);
+  napi_add_env_cleanup_hook(env,[](void* d){delete static_cast<Capture*>(d);},cap);
   return exports;
 }
 NODE_API_MODULE(pair_capture,Init)
