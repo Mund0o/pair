@@ -71,6 +71,7 @@ function downloadInstaller(url, dest) {
 // One check cycle. Resolves when done; never throws (logs errors instead).
 async function checkOnce(feedUrl) {
   if (checking) return;
+  if (!feedUrl) { console.log('[updater] no feed URL configured'); return; }
   checking = true;
   try { const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
   let manifest;
@@ -86,15 +87,15 @@ async function checkOnce(feedUrl) {
   console.log('[updater] update available:', manifest.version, '(have', current + ')');
   if (process.platform === 'win32') {
     if (!manifest.winUrl) return;
-    if (win) win.webContents.send('update-available', {
+    try { if (win) win.webContents.send('update-available', {
       platform: 'win32', version: manifest.version, notes: manifest.notes || '', stage: 'downloading'
-    });
+    }); } catch {}
     try {
       const dest = path.join(app.getPath('userData'), 'pair-update.exe');
       await downloadInstaller(manifest.winUrl, dest);
-      if (win) win.webContents.send('update-available', {
+      try { if (win) win.webContents.send('update-available', {
         platform: 'win32', version: manifest.version, stage: 'ready'
-      });
+      }); } catch {}
       // Track whether the user requests the restart; also install on quit.
       pendingInstall = { path: dest };
     } catch (e) {
@@ -102,10 +103,10 @@ async function checkOnce(feedUrl) {
     }
   } else {
     // Linux (tar.gz): cannot self-install, just notify with a download link.
-    if (win) win.webContents.send('update-available', {
+    try { if (win) win.webContents.send('update-available', {
       platform: 'linux', version: manifest.version, notes: manifest.notes || '',
       url: manifest.linuxUrl, stage: 'link'
-    });
+    }); } catch {}
   }
 } finally { checking = false; } }
 
