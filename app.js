@@ -119,10 +119,6 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   // even after endCall nulls its track and the receiver track is momentarily
   // unavailable — which would otherwise fall through to a second m-line.
   try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch{audioTransceiver=null}
-  // Pre-negotiate a video transceiver for screen sharing (no track attached yet).
-  // Both sides create it inactive so the m-line exists in the SDP without sending.
-  // When the user shares, replaceTrack starts the flow — no renegotiation needed.
-  try{screenTransceiver=pc.addTransceiver('video',{direction:'sendrecv'});screenTransceiver.setDirection('sendrecv');const caps=RTCRtpSender.getCapabilities('video');if(caps){const codecs=[];const prefer=codec=>caps.codecs.findIndex(c=>c.mimeType===codec);['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const idx=prefer(mt);if(idx>=0)codecs.push(caps.codecs[idx])});if(codecs.length>0)try{screenTransceiver.setCodecPreferences(codecs)}catch{}}}catch{screenTransceiver=null}
   let gestureGuard=false;
   pc.ontrack=e=>{try{if(e.track.kind==='audio'){audioTransceiver=e.transceiver;if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
@@ -320,7 +316,8 @@ async function automaticPair(kind){
       }else if(remote.kind==='answer'&&role==='host'){
         await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;await derive(pc._kp,remote.pub);
         openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
-      }
+      }else if(remote.kind==='reneg-offer'&&role==='join'){try{await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription(a);if(!pc)return;await waitIce();if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp:pc.localDescription.sdp}}))}catch(e){console.warn('reneg-offer error',e)}}
+      else if(remote.kind==='reneg-answer'&&role==='host'){try{await pc.setRemoteDescription({type:'answer',sdp:remote.sdp})}catch(e){console.warn('reneg-answer error',e)}}
     }
   }catch(e){console.warn('signaling message error',e);pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
 }
@@ -328,7 +325,7 @@ async function automaticPair(kind){
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
-function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.onclose=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};try{remoteScreen.srcObject=null}catch{};remoteScreen.hidden=true;screenActive=false;screenStream=null;screenTransceiver=null;
+function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.onclose=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};try{remoteScreen.srcObject=null}catch{};remoteScreen.hidden=true;screenActive=false;screenStream=null;
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
@@ -427,6 +424,22 @@ callBtn.onclick=()=>{if(callActive)endCall(false);else startCall()};
 muteBtn.onclick=toggleMute;
 
 // --- Screen share -------------------------------------------------------------
+let renegotiating=0;
+async function renegotiate(id){
+  if(!signaling||!pc)return;
+  const myId=++renegotiating;
+  try{
+    if(role==='host'){
+      const offer=await pc.createOffer({iceRestart:false});
+      if(!pc||myId!==renegotiating)return;
+      await pc.setLocalDescription(offer);
+      if(!pc||myId!==renegotiating)return;
+      await waitIce();
+      if(!signaling||myId!==renegotiating)return;
+      signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:pc.localDescription.sdp}}));
+    }
+  }catch(e){console.warn('renegotiate error',e)}
+}
 async function startScreenShare(){
   if(screenActive||!pc)return;
   const gen=++screenGen;
@@ -439,21 +452,19 @@ async function startScreenShare(){
     screenStream=stream;
     const track=stream.getVideoTracks()[0];
     if(!track){stream.getTracks().forEach(t=>t.stop());return}
-    // Use the pre-negotiated video transceiver's sender
-    const tr=screenTransceiver&&screenTransceiver.mid?screenTransceiver
-      :pc.getTransceivers().find(t=>t.mid&&t.kind==='video')
-      ||screenTransceiver
-      ||pc.getTransceivers().find(t=>t.kind==='video');
-    const sender=tr?tr.sender:null;
-    if(!sender){stream.getTracks().forEach(t=>t.stop());return}
-    try{await sender.replaceTrack(track)}catch{stream.getTracks().forEach(t=>t.stop());return}
-    if(gen!==screenGen||!pc){try{sender.replaceTrack(null)}catch{};stream.getTracks().forEach(t=>t.stop());return}
+    // Add the track dynamically — creates a new video transceiver
+    let sender;
+    try{sender=pc.addTrack(track,stream)}catch{stream.getTracks().forEach(t=>t.stop());return}
+    // Prefer AV1 then VP9 then VP8 codec order
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
+    if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
     screenBtn.textContent='⏹ Stop Sharing';screenStatus.textContent='Sharing';
     try{send({t:'screen-start'})}catch{};
     logCallEvent('You started screen sharing');
     track.onended=()=>{if(screenActive)stopScreenShare()};
+    await renegotiate(renegotiating);if(gen!==screenGen)return;
   }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
 }
 function stopScreenShare(fromEnd){
@@ -461,7 +472,7 @@ function stopScreenShare(fromEnd){
   screenGen++;
   screenActive=false;
   if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null}
-  if(pc){try{pc.getSenders().forEach(s=>{if(s.track&&s.track.kind==='video'){try{s.replaceTrack(null)}catch{}}})}catch{}}
+  if(pc){const senders=pc.getSenders().filter(s=>s.track&&s.track.kind==='video');senders.forEach(s=>{try{pc.removeTrack(s)}catch{}});renegotiate(renegotiating)}
   screenPreview.srcObject=null;screenPreview.hidden=true;
   screenBtn.textContent='🖥 Share Screen';screenBtn.disabled=!pc;
   if(!fromEnd){screenStatus.textContent='Not sharing';try{send({t:'screen-end'})}catch{};logCallEvent('You stopped screen sharing')}
