@@ -516,6 +516,8 @@ async function startScreenShare(){
     try{sender=pc.addTrack(track,stream)}catch{stream.getTracks().forEach(t=>t.stop());return}
     // Prefer AV1 then VP9 then VP8 codec order
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
+    // Set extreme bitrate on the video sender to minimize compression artifacts
+    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=200_000_000});await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
@@ -545,6 +547,8 @@ async function stopScreenShare(fromEnd){
 }
 screenBtn.onclick=()=>{if(screenActive)stopScreenShare();else startScreenShare()};
 screenPreset.onchange=()=>{if(screenActive){stopScreenShare();startScreenShare()}};
+// Double-click the remote screen to toggle fullscreen.
+remoteScreen.ondblclick=()=>{if(!document.fullscreenElement){remoteScreen.requestFullscreen()}else{document.exitFullscreen()}};
 
 // Auto-update banner. Only wires up when running inside the Pair app
 // (window.pairEnv is exposed by preload.js). Browsers ignore this block.
