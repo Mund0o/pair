@@ -204,12 +204,13 @@ app.on('window-all-closed', async () => {
 
 // --- Native WASAPI loopback capture with echo cancellation ---
 // Loads the C++ addon that captures system audio and cancels Pair's voice output.
-// The addon must be built first via 'node-gyp rebuild' (or electron-rebuild).
+// The addon is built by 'node-gyp rebuild --directory=addon' which outputs to
+// addon/build/Release/pair-capture.node.
 let nativeCapture = null;
 function loadNativeCapture() {
   if (nativeCapture) return nativeCapture;
   try {
-    const addon = require('./build/Release/pair-capture');
+    const addon = require('./addon/build/Release/pair-capture');
     nativeCapture = addon;
     return addon;
   } catch (e) {
