@@ -543,8 +543,8 @@ async function startScreenShare(){
     // Add the video track
     let sender;
     try{sender=pc.addTrack(track,stream)}catch{stream.getTracks().forEach(t=>t.stop());return}
-    // Add the audio track if present (system audio)
-    const audioTrack=stream.getAudioTracks()[0];
+    // Add the audio track (system audio minus Pair's voice output to prevent echo)
+    const audioTrack=await cleanScreenAudio(stream);
     if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
     // Prefer AV1 then VP9 then VP8 codec order
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
@@ -559,6 +559,23 @@ async function startScreenShare(){
     // Set encoding params AFTER renegotiation so Chrome doesn't reset them.
     try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=200_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
   }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
+}
+// Mix-minus: capture system audio, subtract Pair's voice output to prevent echo.
+// Returns a clean audio track or null if unavailable.
+async function cleanScreenAudio(displayStream){
+  const raw=displayStream.getAudioTracks()[0];
+  if(!raw)return null;
+  try{
+    if(!remoteAudio.srcObject)return raw;
+    const ctx=new AudioContext();
+    const cs=ctx.createMediaStreamSource(displayStream);
+    const ps=ctx.createMediaElementSource(remoteAudio);
+    const inv=ctx.createGain();inv.gain.value=-0.85;
+    const dest=ctx.createMediaStreamDestination();
+    cs.connect(dest);ps.connect(inv);ps.connect(ctx.destination);inv.connect(dest);
+    const clean=dest.stream.getAudioTracks()[0];
+    if(clean){raw.stop();return clean}else return raw;
+  }catch(e){console.warn('mix-minus failed:',e);return raw}
 }
 async function stopScreenShare(fromEnd){
   if(!screenActive&&!fromEnd)return;
