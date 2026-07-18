@@ -1,7 +1,7 @@
 {
-  "version": "1.0.25",
-  "notes": "Update available.",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.25/Pair.Setup.1.0.25.exe",
-  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.25/Pair.Setup.1.0.25.exe.blockmap",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.25/pair-p2p-1.0.25.tar.gz"
+"version": "1.0.26",
+  "notes": "Fix voice call join failure: use pc.getTransceivers() directly instead of cached audioTransceiver variable.",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.26/Pair.Setup.1.0.26.exe",
+  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.26/Pair.Setup.1.0.26.exe.blockmap",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.26/pair-p2p-1.0.26.tar.gz"
 }
