@@ -38,10 +38,16 @@ function setupPermanentAudioSink(){
     const ctx=sfxCtx();const st=remoteAudio.srcObject;
     if(!ctx||!st||!st.getAudioTracks().length)return;
     if(ctx.state==='suspended'){
-      ctx.addEventListener('statechange',function h(){if(ctx.state==='running'){ctx.removeEventListener('statechange',h);setupPermanentAudioSink()}});
+      // Guard against stacking listeners: only register one resume retry at a
+      // time. Without this, every ontrack/call-ring before the first user
+      // gesture would add another statechange listener + resume call.
+      if(ctx._pairSinkArmed)return;
+      ctx._pairSinkArmed=true;
+      ctx.addEventListener('statechange',function h(){if(ctx.state==='running'){ctx.removeEventListener('statechange',h);ctx._pairSinkArmed=false;setupPermanentAudioSink()}});
       try{ctx.resume()}catch{}
       return
     }
+    if(ctx._pairSinkArmed)ctx._pairSinkArmed=false;
     if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}
     try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.destination);ctx.audioSink=src}catch{}
   }catch{}
@@ -81,7 +87,9 @@ async function seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));c
 async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(o.iv)},sharedKey,new Uint8Array(o.data)))}
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
 function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}function addMessage(text,mine=false){$('.empty')?.remove();const el=document.createElement('div');el.className='message '+(mine?'mine':'');el.innerHTML='<div class="bubble"></div><div class="meta">'+(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+'</div>';el.querySelector('.bubble').textContent=text;messages.append(el);messages.scrollTop=messages.scrollHeight}
-function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));      else if(o.t==='call-ring'){setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}else if(o.t==='screen-start'){logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){logCallEvent('Friend stopped screen sharing');screenStatus.textContent='Not sharing';}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
+function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
+        // call→leave cycle still plays the leave tone instead of going silent.
+        friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}else if(o.t==='screen-start'){logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 
@@ -118,9 +126,9 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   // reference so startCall always reuses THIS transceiver (never addTransceiver),
   // even after endCall nulls its track and the receiver track is momentarily
   // unavailable — which would otherwise fall through to a second m-line.
-  try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv')}catch{audioTransceiver=null}
+  try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});audioTransceiver.setDirection('sendrecv');console.log('setupPeer: audioTransceiver created mid=%s sender=%s',audioTransceiver.mid,!!audioTransceiver.sender)}catch(e){console.warn('setupPeer: addTransceiver failed',e);audioTransceiver=null}
   let gestureGuard=false;
-  pc.ontrack=e=>{try{if(e.track.kind==='audio'){audioTransceiver=e.transceiver;if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
+  pc.ontrack=e=>{try{if(e.track.kind==='audio'){if(e.transceiver)console.log('ontrack audio: transceiver mid=%s sender=%s',e.transceiver.mid,!!e.transceiver.sender);audioTransceiver=e.transceiver;if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();await pc.setLocalDescription(await pc.createOffer());await waitIce();signalOut.value=makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this signal to your friend. Paste their answer into Friend’s signal, then click Apply signal.'};
@@ -316,8 +324,17 @@ async function automaticPair(kind){
       }else if(remote.kind==='answer'&&role==='host'){
         await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;await derive(pc._kp,remote.pub);
         openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
-      }else if(remote.kind==='reneg-offer'&&role==='join'){try{await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription(a);if(!pc)return;await waitIce();if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp:pc.localDescription.sdp}}))}catch(e){console.warn('reneg-offer error',e)}}
-      else if(remote.kind==='reneg-answer'&&role==='host'){try{await pc.setRemoteDescription({type:'answer',sdp:remote.sdp})}catch(e){console.warn('reneg-answer error',e)}}
+      }else if(remote.kind==='reneg-offer'){
+        // Either peer can initiate screen share, so both roles must be able to
+        // answer a reneg-offer.
+        // Glare handling: if we have our own reneg pending, the joiner defers
+        // (supersede its offer and answer the host's instead). role is always
+        // opposite across the two peers, so this is a deterministic tiebreak.
+        if(renegPending&&role==='join'){renegotiating++;renegPending=false}
+        try{if(!pc)return;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription(a);if(!pc)return;await waitIce();if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp:pc.localDescription.sdp}}))}catch(e){console.warn('reneg-offer error',e)}
+      }else if(remote.kind==='reneg-answer'){
+        try{if(!pc)return;await pc.setRemoteDescription({type:'answer',sdp:remote.sdp})}catch(e){console.warn('reneg-answer error',e)}
+      }
     }
   }catch(e){console.warn('signaling message error',e);pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
 }
@@ -373,7 +390,7 @@ async function startCall(){
       ||audioTransceiver
       ||pc.getTransceivers().find(t=>t.kind==='audio');
     const sender=tr?tr.sender:null;
-    if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
+    if(!sender){console.warn('startCall: no audio sender. audioTransceiver:',audioTransceiver,'mid:',audioTransceiver?.mid,'sender:',audioTransceiver?.sender, 'pc.getTransceivers():',pc.getTransceivers().map(t=>({kind:t.kind,mid:t.mid,sender:t.sender,direction:t.direction,receiver:t.receiver})));try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
@@ -424,21 +441,29 @@ callBtn.onclick=()=>{if(callActive)endCall(false);else startCall()};
 muteBtn.onclick=toggleMute;
 
 // --- Screen share -------------------------------------------------------------
+// Either peer can start/stop screen share, so either peer can drive a
+// renegotiation. `renegotiating` is a generation counter: each call increments
+// it and only the most-recent call is allowed to send its offer. That way a
+// quick stop→start (or a preset change) supersedes any in-flight reneg.
 let renegotiating=0;
-async function renegotiate(id){
+// Glare guard: if we receive the peer's reneg-offer while we have one pending,
+// we resolve it by role. The joiner defers (answers the host's offer instead of
+// insisting on its own); the host wins. role is deterministic across peers.
+let renegPending=false;
+async function renegotiate(){
   if(!signaling||!pc)return;
   const myId=++renegotiating;
+  renegPending=true;
   try{
-    if(role==='host'){
-      const offer=await pc.createOffer({iceRestart:false});
-      if(!pc||myId!==renegotiating)return;
-      await pc.setLocalDescription(offer);
-      if(!pc||myId!==renegotiating)return;
-      await waitIce();
-      if(!signaling||myId!==renegotiating)return;
-      signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:pc.localDescription.sdp}}));
-    }
+    const offer=await pc.createOffer({iceRestart:false});
+    if(!pc||myId!==renegotiating){renegPending=false;return}
+    await pc.setLocalDescription(offer);
+    if(!pc||myId!==renegotiating){renegPending=false;return}
+    await waitIce();
+    if(!signaling||myId!==renegotiating){renegPending=false;return}
+    signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:pc.localDescription.sdp}}));
   }catch(e){console.warn('renegotiate error',e)}
+  renegPending=false;
 }
 async function startScreenShare(){
   if(screenActive||!pc)return;
@@ -464,15 +489,22 @@ async function startScreenShare(){
     try{send({t:'screen-start'})}catch{};
     logCallEvent('You started screen sharing');
     track.onended=()=>{if(screenActive)stopScreenShare()};
-    await renegotiate(renegotiating);if(gen!==screenGen)return;
+    await renegotiate();if(gen!==screenGen)return;
   }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
 }
-function stopScreenShare(fromEnd){
+async function stopScreenShare(fromEnd){
   if(!screenActive&&!fromEnd)return;
   screenGen++;
   screenActive=false;
   if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null}
-  if(pc){const senders=pc.getSenders().filter(s=>s.track&&s.track.kind==='video');senders.forEach(s=>{try{pc.removeTrack(s)}catch{}});renegotiate(renegotiating)}
+  if(pc){
+    const senders=pc.getTransceivers().filter(t=>t.sender&&t.sender.track&&t.sender.track.kind==='video').map(t=>t.sender);
+    senders.forEach(s=>{try{pc.removeTrack(s)}catch{}});
+    // Await so a rapid Share→preset-change→Share can't start a second reneg
+    // before the removal reneg has been signaled (which would otherwise race
+    // two offers and leave a dangling localDescription).
+    await renegotiate();
+  }
   screenPreview.srcObject=null;screenPreview.hidden=true;
   screenBtn.textContent='🖥 Share Screen';screenBtn.disabled=!pc;
   if(!fromEnd){screenStatus.textContent='Not sharing';try{send({t:'screen-end'})}catch{};logCallEvent('You stopped screen sharing')}
