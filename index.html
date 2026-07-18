@@ -36,21 +36,31 @@
         <details class="manual-pair"><summary>Advanced: manual signal pairing</summary><p class="hint">This is the original fallback. It requires copying large WebRTC signals between devices and is usually unnecessary.</p><div class="pair-grid"><div><label for="signalOut">Your signal</label><textarea id="signalOut" readonly placeholder="Create an offer or answer…"></textarea><div class="button-row"><button id="createOffer">Create offer</button><button id="createAnswer">Create answer</button></div></div><div><label for="signalIn">Friend’s signal</label><textarea id="signalIn" placeholder="Paste your friend’s signal…"></textarea><button id="applySignal" class="wide">Apply signal</button></div></div><button id="copySignal" class="text-button">Copy generated signal</button></details>
       </section>
 
+      <section class="voice card">
+        <div class="section-heading"><div><p class="eyebrow">02 / CALL</p><h2>Voice</h2></div><span id="callTimer" class="call-timer"></span></div>
+        <div class="voice-body">
+          <div class="voice-participants">
+            <div class="voice-participant" id="participantYou"><i class="indicator"></i><span>You</span></div>
+            <div class="voice-participant" id="participantFriend"><i class="indicator"></i><span>Friend</span></div>
+          </div>
+          <div class="voice-controls">
+            <button id="callBtn" class="primary" disabled>🎙 Start voice</button>
+            <button id="muteBtn" hidden>🔇 Mute mic</button>
+            <span id="callStatus" class="call-status">Voice off</span>
+          </div>
+          <div id="voiceLog" class="voice-log"></div>
+        </div>
+      </section>
+
       <section class="workspace">
         <div class="chat card">
-          <div class="section-heading"><div><p class="eyebrow">02 / CHAT</p><h2>Private room</h2></div><span class="pill">DIRECT</span></div>
-          <div class="voice-bar">
-            <button id="callBtn" class="text-button" disabled>🎙 Start voice</button>
-            <button id="muteBtn" class="text-button" hidden>🔇 Mute mic</button>
-            <span id="callStatus" class="call-status">Voice off</span>
-            <span id="callTimer" class="call-timer"></span>
-          </div>
+          <div class="section-heading"><div><p class="eyebrow">03 / CHAT</p><h2>Private room</h2></div><span class="pill">DIRECT</span></div>
           <div id="messages" class="messages"><div class="empty"><span>✦</span><p>Messages travel directly between your devices.</p></div></div>
           <form id="messageForm" class="composer"><input id="messageInput" autocomplete="off" placeholder="Write a message…" disabled /><button class="send" disabled>Send</button></form>
           <audio id="remoteAudio" autoplay></audio>
         </div>
         <aside class="files card">
-          <div class="section-heading"><div><p class="eyebrow">03 / TRANSFER</p><h2>Files</h2></div><div class="heading-actions"><span class="limit">UP TO 120 GB</span><button id="clearTransfers" class="text-button" hidden>Clear list</button></div></div>
+          <div class="section-heading"><div><p class="eyebrow">04 / TRANSFER</p><h2>Files</h2></div><div class="heading-actions"><span class="limit">UP TO 120 GB</span><button id="clearTransfers" class="text-button" hidden>Clear list</button></div></div>
           <input id="fileInput" type="file" hidden multiple disabled />
           <button id="chooseFiles" class="dropzone" disabled><span class="upload-icon">↑</span><strong>Choose files</strong><small>Encrypted locally, sent peer to peer</small></button>
           <div id="transfers" class="transfers"><p class="muted small">No transfers yet.</p></div>
