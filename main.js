@@ -1,3 +1,4 @@
+const path = require('path');
 const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, screen } = require('electron');
 
 let mainWin = null;
@@ -203,21 +204,32 @@ app.on('window-all-closed', async () => {
 // The addon is built by 'node-gyp rebuild --directory=addon' which outputs to
 // addon/build/Release/pair-capture.node.
 let nativeCapture = null;
-function loadNativeCapture() {
+function loadNativeCapture(win) {
   if (nativeCapture) return nativeCapture;
-  try {
-    const addon = require('./addon/build/Release/pair-capture');
-    nativeCapture = addon;
-    console.log('Native capture addon loaded successfully');
-    return addon;
-  } catch (e) {
-    console.warn('Native capture addon not available:', e.message);
-    return null;
+  const paths = [
+    path.join(__dirname, 'addon', 'build', 'Release', 'pair-capture'),
+    path.join(__dirname, '..', 'addon', 'build', 'Release', 'pair-capture'),
+    path.join(process.cwd(), 'addon', 'build', 'Release', 'pair-capture'),
+  ];
+  for (const addonPath of paths) {
+    try {
+      console.log('Trying addon path:', addonPath);
+      const addon = require(addonPath);
+      nativeCapture = addon;
+      console.log('Native capture addon loaded from:', addonPath);
+      return addon;
+    } catch (e) {
+      console.warn('Addon path failed:', addonPath, '-', e.message);
+    }
   }
+  const errMsg = 'Addon not built - tried ' + paths.length + ' paths';
+  console.warn(errMsg);
+  if (win && !win.isDestroyed()) try { win.send('pair:captureError', errMsg); } catch {}
+  return null;
 }
 function startNativeCapture(win) {
-  const addon = loadNativeCapture();
-  if (!addon) { try{if(win&&!win.isDestroyed())win.send('pair:captureError', 'Addon not built')}catch{}; return; }
+  const addon = loadNativeCapture(win);
+  if (!addon) { return; }
   if (addon._running) return;
   console.log('native capture: starting...');
   let cbCount=0;
