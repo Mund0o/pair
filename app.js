@@ -136,28 +136,28 @@ const EMOJI_CATS=[
 ];
 let emojiPicker=null,emojiBtn=null,gifPicker=null,gifBtn=null;
 function buildEmojiPicker(){
-  const wrap=document.createElement('div');wrap.className='emoji-picker';wrap.hidden=true;
+  const wrap=document.createElement('div');wrap.className='emoji-picker';wrap.classList.add('hidden');
   const tabs=document.createElement('div');tabs.className='emoji-tabs';
   const body=document.createElement('div');body.className='emoji-body';
   EMOJI_CATS.forEach((cat,i)=>{
     const tab=document.createElement('button');tab.className='emoji-tab'+(i===0?' active':'');tab.textContent=cat.name[0]+cat.name[1];
-    tab.onclick=()=>{body.querySelectorAll('.emoji-page').forEach(p=>p.hidden=true);body.children[i].hidden=false;tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));tab.classList.add('active')};
+    tab.onclick=()=>{body.querySelectorAll('.emoji-page').forEach(p=>p.classList.add('hidden'));body.children[i].classList.remove('hidden');tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));tab.classList.add('active')};
     tabs.append(tab);
-    const page=document.createElement('div');page.className='emoji-page';page.hidden=i!==0;
+    const page=document.createElement('div');page.className='emoji-page';page.classList.toggle('hidden',i!==0);
     cat.emojis.forEach(e=>{
       const btn=document.createElement('button');btn.className='emoji-item';btn.textContent=e;
-      btn.onclick=()=>{const inp=messageInput;const s=inp.selectionStart;const v=inp.value;inp.value=v.slice(0,s)+e+v.slice(inp.selectionEnd);inp.selectionStart=inp.selectionEnd=s+e.length;inp.focus();wrap.hidden=true};
+      btn.onclick=()=>{const inp=messageInput;const s=inp.selectionStart;const v=inp.value;inp.value=v.slice(0,s)+e+v.slice(inp.selectionEnd);inp.selectionStart=inp.selectionEnd=s+e.length;inp.focus();wrap.classList.add('hidden')};
       page.append(btn);
     });
     body.append(page);
   });
   wrap.append(tabs,body);
   // Close on outside click
-  document.addEventListener('click',e=>{if(!wrap.contains(e.target)&&e.target!==emojiBtn)wrap.hidden=true});
+  document.addEventListener('click',e=>{if(!wrap.contains(e.target)&&e.target!==emojiBtn)wrap.classList.add('hidden')});
   return wrap;
 }
 function buildGifPicker(){
-  const wrap=document.createElement('div');wrap.className='gif-picker';wrap.hidden=true;
+  const wrap=document.createElement('div');wrap.className='gif-picker';wrap.classList.add('hidden');
   const tabs=document.createElement('div');tabs.className='gif-picker-tabs';
   const gifTab=document.createElement('button');gifTab.className='gif-picker-tab active';gifTab.textContent='GIFs';
   const stiTab=document.createElement('button');stiTab.className='gif-picker-tab';stiTab.textContent='Stickers';
@@ -182,7 +182,7 @@ function buildGifPicker(){
     timer=setTimeout(()=>{if(q)loadMerged(q,results,currentType);else loadMerged('',results,currentType)},400);
   };
   searchRow.append(inp);wrap.append(tabs,searchRow,results);
-  document.addEventListener('click',e=>{if(!wrap.contains(e.target)&&e.target!==gifBtn)wrap.hidden=true});
+  document.addEventListener('click',e=>{if(!wrap.contains(e.target)&&e.target!==gifBtn)wrap.classList.add('hidden')});
   return wrap;
 }
 function giphyFetch(endpoint,type,query){
@@ -216,7 +216,7 @@ function renderFavs(resultsEl){
     const btn=document.createElement('button');btn.className='gif-result';
     const img=document.createElement('img');img.src=f.thumb;img.loading='lazy';
     btn.append(img);
-    btn.onclick=async()=>{const msg=f.url;if(msg&&sharedKey){send({t:'msg',v:await seal(msg)});addMessage(msg,true);const wrap=resultsEl.parentElement;wrap.hidden=true};analyticsShared(f.type||f)};
+    btn.onclick=async()=>{const msg=f.url;if(msg&&sharedKey){send({t:'msg',v:await seal(msg)});addMessage(msg,true);const wrap=resultsEl.parentElement;wrap.classList.add('hidden')};analyticsShared(f.type||f)};
     // Context menu to remove
     btn.oncontextmenu=e=>{e.preventDefault();toggleFav(f.id);renderFavs(resultsEl)};
     resultsEl.append(btn);
@@ -249,7 +249,7 @@ function renderItem(item,resultsEl){
   const star=document.createElement('span');star.className='gif-star'+(isFav?' on':'');star.textContent='★';star.title='Favorite';
   star.onclick=e=>{e.stopPropagation();const on=toggleFav(item.id,item.fullUrl,item.thumb,item);star.classList.toggle('on',on)};
   btn.append(star);
-  btn.onclick=async()=>{if(item.fullUrl&&sharedKey){send({t:'msg',v:await seal(item.fullUrl)});addMessage(item.fullUrl,true);const wrap=resultsEl.parentElement;wrap.hidden=true;const si=wrap.querySelector('.gif-search-input');if(si)si.value='';resultsEl.innerHTML=''};analyticsShared(item)};
+  btn.onclick=async()=>{if(item.fullUrl&&sharedKey){send({t:'msg',v:await seal(item.fullUrl)});addMessage(item.fullUrl,true);const wrap=resultsEl.parentElement;wrap.classList.add('hidden');const si=wrap.querySelector('.gif-search-input');if(si)si.value='';resultsEl.innerHTML=''};analyticsShared(item)};
   resultsEl.append(btn);
 }
 // Initialise pickers once sharedKey is set (i.e. after connection).
@@ -261,22 +261,22 @@ function renderItem(item,resultsEl){
   // Plus button
   const plusWrap=document.createElement('div');plusWrap.style.cssText='position:relative;display:inline-flex';
   const plusBtn=document.createElement('button');plusBtn.type='button';plusBtn.className='composer-btn plus-btn';plusBtn.textContent='+';plusBtn.title='Attach';
-  const plusPopup=document.createElement('div');plusPopup.className='plus-popup';plusPopup.hidden=true;
+  const plusPopup=document.createElement('div');plusPopup.className='plus-popup';plusPopup.classList.add('hidden');
   const fileOpt=document.createElement('button');fileOpt.className='plus-opt';fileOpt.textContent='📎 Send file';
-  fileOpt.onclick=()=>{plusPopup.hidden=true;fileInput.click()};
+  fileOpt.onclick=()=>{plusPopup.classList.add('hidden');fileInput.click()};
   plusPopup.append(fileOpt);plusWrap.append(plusBtn,plusPopup);composer.insertBefore(plusWrap,sendBtn.nextSibling);
-  plusBtn.onclick=e=>{e.preventDefault();plusPopup.hidden=!plusPopup.hidden;emojiPicker&&(emojiPicker.hidden=true);gifPicker&&(gifPicker.hidden=true)};
-  document.addEventListener('click',e=>{if(!plusWrap.contains(e.target))plusPopup.hidden=true});
+  plusBtn.onclick=e=>{e.preventDefault();plusPopup.classList.toggle('hidden');emojiPicker&&emojiPicker.classList.add('hidden');gifPicker&&gifPicker.classList.add('hidden')};
+  document.addEventListener('click',e=>{if(!plusWrap.contains(e.target))plusPopup.classList.add('hidden')});
   emojiBtn=document.createElement('button');emojiBtn.type='button';emojiBtn.className='composer-btn emoji-btn';emojiBtn.textContent='😊';emojiBtn.title='Emoji';
   emojiPicker=buildEmojiPicker();emojiPicker.style.position='absolute';emojiPicker.style.bottom='100%';emojiPicker.style.right='60px';
   composer.append(emojiPicker);
-  emojiBtn.onclick=e=>{e.preventDefault();emojiPicker.hidden=!emojiPicker.hidden;gifPicker&&(gifPicker.hidden=true);plusPopup&&(plusPopup.hidden=true)};
+  emojiBtn.onclick=e=>{e.preventDefault();emojiPicker.classList.toggle('hidden');gifPicker&&gifPicker.classList.add('hidden');plusPopup&&plusPopup.classList.add('hidden')};
   composer.insertBefore(emojiBtn,sendBtn.nextSibling);
   // GIF button
   gifBtn=document.createElement('button');gifBtn.type='button';gifBtn.className='composer-btn gif-btn';gifBtn.textContent='GIF';gifBtn.title='GIF';
   gifPicker=buildGifPicker();gifPicker.style.position='absolute';gifPicker.style.bottom='100%';gifPicker.style.right='0';
   composer.append(gifPicker);
-  gifBtn.onclick=e=>{e.preventDefault();const show=gifPicker.hidden;gifPicker.hidden=!show;emojiPicker&&(emojiPicker.hidden=true);plusPopup&&(plusPopup.hidden=true);if(show){const r=gifPicker.querySelector('.gif-results');const tabs=gifPicker.querySelectorAll('.gif-picker-tab');if(tabs[2]?.classList.contains('active'))renderFavs(r);else{const type=tabs[1]?.classList.contains('active')?'stickers':'gifs';loadMerged('',r,type)}}};
+  gifBtn.onclick=e=>{e.preventDefault();const show=gifPicker.classList.contains('hidden');gifPicker.classList.toggle('hidden');emojiPicker&&emojiPicker.classList.add('hidden');plusPopup&&plusPopup.classList.add('hidden');if(show){const r=gifPicker.querySelector('.gif-results');const tabs=gifPicker.querySelectorAll('.gif-picker-tab');if(tabs[2]?.classList.contains('active'))renderFavs(r);else{const type=tabs[1]?.classList.contains('active')?'stickers':'gifs';loadMerged('',r,type)}}};
   composer.insertBefore(gifBtn,sendBtn.nextSibling);
   // Enable input/button on connect
   const orig=messageInput.disabled;
@@ -346,7 +346,7 @@ function setupPeer(){
   }catch(e){console.warn('Silent audio track failed, using addTransceiver:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null}}
   logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid:'null'));
   let gestureGuard=false;
-  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){if(remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject){logCallEvent('Screen audio received');return}logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
+  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){if(remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject){logCallEvent('Screen audio received');const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0;const scPlay=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};scPlay();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{scPlay()},{once:true});document.addEventListener('keydown',()=>{scPlay()},{once:true})};return}logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=510000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=510000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('stereo'))m+='; stereo=0';if(!m.includes('sprop-stereo'))m+='; sprop-stereo=0';return m})}
@@ -638,7 +638,10 @@ async function startCall(){
     const track=localStream.getAudioTracks()[0];
     const allTransceivers=pc.getTransceivers();
     const tr=audioTransceiver||allTransceivers.find(t=>t.receiver.track?.kind==='audio'&&t.mid)||allTransceivers.find(t=>t.receiver.track?.kind==='audio')||(function(){try{return pc.addTransceiver('audio',{direction:'sendrecv'})}catch{return null}})();
-    const sender=tr?tr.sender:null;
+    // audioTransceiver may be an RTCRtpSender (from addTrack) which has no .sender.
+    // Resolve to the transceiver that owns it so sender.sender is correct.
+    const resolvedTr=tr&&tr.mid===undefined&&!tr.sender?allTransceivers.find(t=>t.sender===tr)||tr:tr;
+    const sender=resolvedTr?resolvedTr.sender:null;
     logCallEvent('Diag: startCall transceivers='+allTransceivers.length+' audioTr='+(tr?'ok:mid='+tr.mid+' dir='+tr.direction:'null')+' sender='+(sender?'ok':'null'));
     if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
@@ -820,7 +823,7 @@ async function startScreenShare(){
     if(nativeTrack){audioTrack.stop();try{pc.addTrack(nativeTrack,new MediaStream([nativeTrack]))}catch{}
     }else if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
     // Prefer AV1 then VP9 then VP8 codec order
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/VP9','video/VP8','video/AV1','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
