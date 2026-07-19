@@ -1,7 +1,7 @@
 {
-  "version": "1.0.66",
+  "version": "1.0.67",
   "notes": "Update available.",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.66/Pair.Setup.1.0.66.exe",
-  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.66/Pair.Setup.1.0.66.exe.blockmap",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.66/pair-p2p-1.0.66.tar.gz"
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.67/Pair.Setup.1.0.67.exe",
+  "winBlockmapUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.67/Pair.Setup.1.0.67.exe.blockmap",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.67/pair-p2p-1.0.67.tar.gz"
 }
