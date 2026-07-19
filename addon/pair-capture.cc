@@ -101,6 +101,8 @@ private:
     return hr;
   }
 
+  int diagCounter=0;
+  int totalProcessed=0;
   void loop(){
     HRESULT hr=audioClient->Start();
     if(FAILED(hr)){emitErr("start failed");return;}
@@ -142,10 +144,23 @@ private:
       float denom=sqrtf(nc*nr);
       if(denom>1e-10f&&c/denom>bestCorr){bestCorr=c/denom;bestD=d;}
     }
-    if(bestCorr>0.3f)bestDelay=(bestDelay*3+bestD)/4;
+    if(bestCorr>0.05f)bestDelay=(bestDelay*3+bestD)/4;
+  }
+
+  void diag(){
+    diagCounter++;
+    if(diagCounter%100!=0)return;
+    char m[128];
+    {
+      std::lock_guard<std::mutex> lk(refMutex);
+      sprintf(m,"[AEC] diag: delay=%d gain=%.4f refWritten=%llu total=%d",bestDelay,estimatedGain,(unsigned long long)refWritten,totalProcessed);
+    }
+    errCb.NonBlockingCall([m](Napi::Env e,Napi::Function cb){cb.Call({Napi::String::New(e,m)});});
   }
 
   void process(BYTE* data,UINT32 frames){
+    totalProcessed+=frames;
+    diag();
     int ch=mixFormat->nChannels;
     int sr=(int)mixFormat->nSamplesPerSec;
     std::vector<float> captured(frames);
@@ -171,13 +186,16 @@ private:
           float r=refRing[(refWritten-delay+i)%RING_SIZE];
           float c=captured[i];
           clean[i]=c-estimatedGain*r;
-          if(fabsf(r)>0.0001f){
+          if(fabsf(r)>0.001f){
             float num=c*r,den=r*r+1e-10f;
-            estimatedGain=0.9995f*estimatedGain+0.0005f*num/den;
-            if(estimatedGain<0)estimatedGain=0;if(estimatedGain>1)estimatedGain=1;
+            estimatedGain=0.998f*estimatedGain+0.002f*num/den;
+            if(estimatedGain<0)estimatedGain=0;
           }
         }
-      }else memcpy(clean.data(),captured.data(),frames*sizeof(float));
+      }else{
+        memcpy(clean.data(),captured.data(),frames*sizeof(float));
+        emitErr("[AEC] bypass: no ref data yet");
+      }
     }
 
     float* buf=(float*)calloc(frames,sizeof(float));

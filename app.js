@@ -769,26 +769,32 @@ async function setupNativeScreenCapture(){
       dest=ctx.createMediaStreamDestination();dest.channelCount=1;
       const RS=96000;const cleanBuf=new Float32Array(RS);
       let wp=0,avail=0;
+      let cleanCount=0;
       const unsubClean=window.pairCapture.onCleanAudio((buf,frames)=>{
+        cleanCount++;
         if(!aecTimedOut){
           addonData=true;
           const arr=new Float32Array(buf);
           for(let i=0;i<arr.length&&avail<RS;i++){cleanBuf[wp]=arr[i];wp=(wp+1)%RS;avail++}
+          if(cleanCount%50===0)console.log('[AEC] clean #'+cleanCount+' frames='+frames+' avail='+avail+' rms='+Math.sqrt(arr.reduce((s,v)=>s+v*v,0)/arr.length).toFixed(5));
         }
       });
       window.pairCapture.onError(msg=>console.warn('[AEC] capture error:',msg));
       window.pairCapture.start();
-      let refProc;
+      let refProc,refCount=0;
       if(refStream&&refStream.getAudioTracks().length){
+        console.log('[AEC] ref stream active, tracks:',refStream.getAudioTracks().length,'label:',refStream.getAudioTracks()[0].label);
         const refSource=ctx.createMediaStreamSource(refStream);
         refProc=ctx.createScriptProcessor(1024,1,0);
         refProc.onaudioprocess=e=>{
+          refCount++;
           const d=e.inputBuffer.getChannelData(0);
           const ab=d.buffer.slice(d.byteOffset,d.byteOffset+d.byteLength);
           window.pairCapture.pushReference(ab);
+          if(refCount%50===0)console.log('[AEC] ref push #'+refCount+' samples='+d.length+' rms='+Math.sqrt(d.reduce((s,v)=>s+v*v,0)/d.length).toFixed(5));
         };
         refSource.connect(refProc);
-      }
+      }else console.warn('[AEC] no ref stream available');
       await new Promise(r=>setTimeout(r,3000));
       if(!addonData){
         console.warn('[AEC] addon no data in 3s, falling back');
@@ -873,10 +879,10 @@ async function startScreenShare(){
   }
   try{
     const preset=SCREEN_PRESETS[screenPreset.value];
-    const v=preset?{...preset}:{};
+    const v=preset?{...preset}:{width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:30,max:30}};
     v.cursor='always';
     const constraints={video:v};
-    constraints.audio=screenAudioOn?(preset?{echoCancellation:true,autoGainControl:false,noiseSuppression:false}:true):false;
+    constraints.audio=screenAudioOn?{echoCancellation:true,autoGainControl:false,noiseSuppression:false}:false;
     const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
     screenStream=stream;
@@ -899,8 +905,8 @@ async function startScreenShare(){
       console.log('[AUDIO] adding track to PC: kind='+audioTrack.kind+' enabled='+audioTrack.enabled+' readyState='+audioTrack.readyState+' label='+audioTrack.label);
       try{pc.addTrack(audioTrack,stream);console.log('[AUDIO] addTrack OK')}catch(e){console.warn('[AUDIO] addTrack failed:',e)}
     }else console.warn('[AUDIO] no audio track in screen stream');
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=['video/AV1','video/VP9','video/H264','video/VP8'].map(mt=>caps.codecs.find(c=>c.mimeType===mt)).filter(Boolean);if(cs.length){tr.setCodecPreferences(cs);console.log('[VIDEO] codecs:',cs.map(c=>c.mimeType+' '+c.sdpFmtpLine?.slice(0,20)).join(', '))}else console.warn('[VIDEO] no codecs match')}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
-    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=400_000_000;await sender.setParameters(p);console.log('[VIDEO] bitrate=400Mbps no deg pref')}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=['video/H264','video/VP8','video/VP9','video/AV1'].map(mt=>caps.codecs.find(c=>c.mimeType===mt)).filter(Boolean);if(cs.length){tr.setCodecPreferences(cs);console.log('[VIDEO] codecs:',cs.map(c=>c.mimeType+' '+c.sdpFmtpLine?.slice(0,20)).join(', '))}else console.warn('[VIDEO] no codecs match')}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
+    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=400_000_000;p.encodings[0].degradationPreference='maintain-framerate';await sender.setParameters(p);console.log('[VIDEO] bitrate=400Mbps maintain-framerate')}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
