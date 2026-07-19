@@ -305,12 +305,24 @@ function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?strea
 // rule remaps 3481 -> 3478.
 const SELF_TURN={username:'pair',credential:'cbb325a9723628e480bb2190014d531c'};
 function defaultTurnServers(){try{const pubIp='YOUR_PUBLIC_IP';return[
+  // Redundant STUN servers improve NAT traversal through VPNs — each uses a
+  // different public IP so a blocked/misbehaving server doesn't stall ICE.
   {urls:'stun:stun.l.google.com:19302'},
   {urls:'stun:stun1.l.google.com:19302'},
+  {urls:'stun:stun2.l.google.com:19302'},
+  {urls:'stun:stun3.l.google.com:19302'},
+  {urls:'stun:stun4.l.google.com:19302'},
+  {urls:'stun:stun.cloudflare.com:3478'},
+  {urls:'stun:stun.twilio.com:3478'},
+  // TURN relay over UDP + TCP on the relay port. VPNs often block non-standard
+  // ports, so a TCP entry on port 443 (standard HTTPS) is included as a fallback.
+  // Forward port 443 → 3478 on the TURN server host for this to work.
   {urls:'turn:'+pubIp+':3481?transport=udp',...SELF_TURN},
-  {urls:'turn:'+pubIp+':3481?transport=tcp',...SELF_TURN}
+  {urls:'turn:'+pubIp+':3481?transport=tcp',...SELF_TURN},
+  {urls:'turn:'+pubIp+':443?transport=tcp',...SELF_TURN}
 ]}catch{return[]}}
-const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}return defaultTurnServers()})();
+const ICE_POLICY=process.env.PAIR_RELAY?{iceTransportPolicy:'relay'}:{};
+const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}try{const e=process.env.PAIR_TURN_EXTRA;if(e)return[...defaultTurnServers(),...JSON.parse(e)]}catch{}return defaultTurnServers()})();
 function setupPeer(){
   // Close previous pc and associated resources if reconnecting (e.g. peer-left → peer-ready).
   // Null pc first so the old pc's onconnectionstatechange handler bails (sees !pc).
@@ -322,7 +334,7 @@ function setupPeer(){
     if(oldFiles){oldFiles.onmessage=null;try{oldFiles.close()}catch{}}
     try{oldPc.close()}catch{}
   }
-  pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  let wasEverConnected=false;
+  pc=new RTCPeerConnection({iceServers:ICE_SERVERS,...ICE_POLICY});pc.onicecandidate=()=>{};  let wasEverConnected=false;
   pc.onconnectionstatechange=()=>{if(!pc)return;if(pc.connectionState==='connected'){screenBtn.disabled=false;screenPreset.disabled=false;if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}    if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}callActive=false;startCall()}}else{setStatus('Connected directly',true);friendLeftNotified=false}}if(['failed','disconnected','closed'].includes(pc.connectionState)){screenBtn.disabled=true;screenPreset.disabled=true;if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}setParticipant(participantFriend,false);setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}};pc.oniceconnectionstatechange=()=>{if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(pc.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
   // network), surface a clear message instead of hanging on "Connecting…" forever.
@@ -533,76 +545,73 @@ async function ssSet(key,val){if(window.pairSettings){try{await window.pairSetti
 
 let signaling;
 async function automaticPair(kind){
-  // Tear down any prior session so a second Host/Join click (or host→leave→host)
-  // doesn't leak an old pc/signaling whose handlers fire stale signals.
   reconnectCall=callActive;if(pc||signaling)disconnectRoom();
   role=kind; const address=$('#signalServer').value.trim(); const room=$('#roomCode').value.trim();
   if(!address||!room)return pairHint.textContent='Enter a signaling address and room code.';
-  pairHint.textContent='Connecting to signaling server…'; signaling=new WebSocket(address);
-  signaling.onopen=()=>{try{signaling.send(JSON.stringify({type:'join',room}))}catch{}pairHint.textContent='Waiting for your friend in room '+room.toUpperCase()+'…'};
-  signaling.onerror=()=>pairHint.textContent='Could not reach the signaling server. Check the address and firewall.';
-  signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);
-    if(message.type==='full'){pairHint.textContent='That room already has two people.';return}
-    if(message.type==='peer-ready'&&role==='host'){
-      reconnectCall=callActive;setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
-      const offer=await pc.createOffer();if(!pc)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
-      logCallEvent('Diag: offer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
-      signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
-      openStreamRelay(address,room);pairHint.textContent='Offer sent. Connecting…';
-      // If the friend never answers (wrong role, different room, or an old build
-      // without TURN), don't hang silently — tell them what to check.
-      setTimeout(()=>{if(pc&&pc.connectionState!=='connected'){pairHint.textContent='No answer from your friend after 20s. Make sure exactly ONE of you clicked Host and the other clicked Join, you are in the SAME room code, and both are on the latest version (v1.0.0+ with TURN).'}},20000)
-    }
-    if(message.type==='signal'){const remote=message.payload;
-      // Both clicked Host: each receives the other's offer but role==='host', so
-      // neither branch matches. Surface it instead of hanging.
-      if(remote.kind==='offer'&&role==='host'){pairHint.textContent='Both of you clicked Host. One of you must click Leave, then that person clicks Join instead.';return}
-      if(remote.kind==='offer'&&role==='join'){
-        setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;
-        await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;await derive(kp,remote.pub);if(!pc)return;
-        // Ensure the audio transceiver's direction is sendrecv so the answer
-        // includes a sender — the browser may have created a recvonly transceiver
-        // for the offer's audio m-line when no local sender track was attached yet.
-        // Force audio transceiver direction to sendrecv so the answer includes a
-        // sender. Also update audioTransceiver to the MATCHED transceiver (with
-        // non-null mid) so startCall uses it — the one from addTransceiver in
-        // setupPeer has mid=null and would send on an un-negotiated path.
-        pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv'){t.setDirection('sendrecv');logCallEvent('Diag: set audioTr direction to sendrecv (was '+t.direction+')')}}catch(e){logCallEvent('Diag: setDirection error: '+e.message)}});
-        const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
-        logCallEvent('Diag: before createAnswer transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
-        const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
-        logCallEvent('Diag: answer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
-        signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
-        openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'
-      }else if(remote.kind==='answer'&&role==='host'){
-        logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
-        await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;await derive(pc._kp,remote.pub);
-        logCallEvent('Diag: after setRD(answer)');
-        const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
-        const cd=matched?matched.currentDirection:'none';
-        logCallEvent('Diag: audio currentDir='+cd);
-        // If the friend's answer didn't include an audio sender, startCall will
-        // add a transceiver and renegotiate instead of relying on the unmatched one.
-        openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
-      }else if(remote.kind==='reneg-offer'){
-        // Either peer can initiate screen share, so both roles must be able to
-        // answer a reneg-offer.
-        // Glare handling: if we have our own reneg pending, the joiner defers
-        // (supersede its offer and answer the host's instead). role is always
-        // opposite across the two peers, so this is a deterministic tiebreak.
-        if(renegPending&&role==='join'){renegotiating++;renegPending=false}
-        try{if(!pc)return;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp:pc.localDescription.sdp}}))}catch(e){console.warn('reneg-offer error',e)}
-      }else if(remote.kind==='reneg-answer'){
-        try{if(!pc)return;await pc.setRemoteDescription({type:'answer',sdp:remote.sdp})}catch(e){console.warn('reneg-answer error',e)}
+  // WebSocket reconnection with exponential backoff for VPN resilience.
+  // Wraps the WebSocket in an auto-reconnect loop so temporary drops (common on
+  // VPNs) don't abort the session. Cancelled by disconnectRoom() which sets
+  // signaling=null and closes the current ws.
+  let ws,reconnectTimer;
+  const connect=()=>{
+    if(!signaling)return; // cancelled
+    pairHint.textContent='Connecting to signaling server…'; ws=new WebSocket(address);
+    ws.onopen=()=>{try{ws.send(JSON.stringify({type:'join',room}))}catch{}pairHint.textContent='Waiting for your friend in room '+room.toUpperCase()+'…'};
+    ws.onerror=()=>{pairHint.textContent='Could not reach the signaling server. Check the address and firewall.'};
+    ws.onclose=()=>{
+      if(!signaling)return; // cancelled by disconnectRoom
+      const delay=Math.min(5000,1000*Math.pow(2,(reconnectTimer||0)));
+      reconnectTimer=(reconnectTimer||0)+1;
+      pairHint.textContent='Signaling disconnected — reconnecting in '+(delay/1000).toFixed(1)+'s…';
+      setTimeout(connect,delay);
+    };
+    ws.onmessage=async event=>{try{const message=JSON.parse(event.data);
+      if(message.type==='full'){pairHint.textContent='That room already has two people.';return}
+      if(message.type==='peer-ready'&&role==='host'){
+        reconnectCall=callActive;setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
+        const offer=await pc.createOffer();if(!pc)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
+        logCallEvent('Diag: offer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
+        ws.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
+        openStreamRelay(address,room);pairHint.textContent='Offer sent. Connecting…';
+        setTimeout(()=>{if(pc&&pc.connectionState!=='connected'){pairHint.textContent='No answer from your friend after 20s. Make sure exactly ONE of you clicked Host and the other clicked Join, you are in the SAME room code, and both are on the latest version (v1.0.0+ with TURN).'}},20000)
       }
-    }
-  }catch(e){console.warn('signaling message error',e);pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
+      if(message.type==='signal'){const remote=message.payload;
+        if(remote.kind==='offer'&&role==='host'){pairHint.textContent='Both of you clicked Host. One of you must click Leave, then that person clicks Join instead.';return}
+        if(remote.kind==='offer'&&role==='join'){
+          setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;
+          await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;await derive(kp,remote.pub);if(!pc)return;
+          pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv'){t.setDirection('sendrecv');logCallEvent('Diag: set audioTr direction to sendrecv (was '+t.direction+')')}}catch(e){logCallEvent('Diag: setDirection error: '+e.message)}});
+          const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
+          logCallEvent('Diag: before createAnswer transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
+          const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
+          logCallEvent('Diag: answer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
+          ws.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
+          openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'
+        }else if(remote.kind==='answer'&&role==='host'){
+          logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
+          await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;await derive(pc._kp,remote.pub);
+          logCallEvent('Diag: after setRD(answer)');
+          const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
+          const cd=matched?matched.currentDirection:'none';
+          logCallEvent('Diag: audio currentDir='+cd);
+          openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
+        }else if(remote.kind==='reneg-offer'){
+          if(renegPending&&role==='join'){renegotiating++;renegPending=false}
+          try{if(!pc)return;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(ws)ws.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp:pc.localDescription.sdp}}))}catch(e){console.warn('reneg-offer error',e)}
+        }else if(remote.kind==='reneg-answer'){
+          try{if(!pc)return;await pc.setRemoteDescription({type:'answer',sdp:remote.sdp})}catch(e){console.warn('reneg-answer error',e)}
+        }
+      }
+    }catch(e){console.warn('signaling message error',e);pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
+  };
+  signaling={ws,close:()=>{clearTimeout(reconnectTimer);if(ws)try{ws.onopen=null;ws.onerror=null;ws.onclose=null;ws.onmessage=null;ws.close()}catch{};ws=null}};
+  connect();
 }
 // Open the separate relay socket used to move file bytes. Same host + room as
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
-function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.onclose=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};try{remoteScreen.srcObject=null}catch{};remoteScreen.hidden=true;screenActive=false;screenStream=null;
+function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.close()}catch{}signaling=null}if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.onclose=null;streamWs.close()}catch{}streamWs=null}streamServer=streamRoom=null;sharedKey=null;try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{};try{remoteScreen.srcObject=null}catch{};remoteScreen.hidden=true;screenActive=false;screenStream=null;
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
