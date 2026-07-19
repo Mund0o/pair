@@ -220,7 +220,7 @@ function loadNativeCapture() {
 }
 function startNativeCapture(win) {
   const addon = loadNativeCapture();
-  if (!addon) { win.webContents.send('pair:captureError', 'Addon not built'); return; }
+  if (!addon) { try{if(win&&!win.isDestroyed())win.send('pair:captureError', 'Addon not built')}catch{}; return; }
   if (addon._running) return;
   console.log('native capture: starting...');
   let cbCount=0;
@@ -229,18 +229,18 @@ function startNativeCapture(win) {
       cbCount++;
       if (cbCount%50===0) console.log('native capture: data cb #'+cbCount+' frames='+frames);
       if (win && !win.isDestroyed()) {
-        try { win.webContents.send('pair:cleanAudio', buf, frames); } catch(e) { console.warn('send cleanAudio err:', e.message); }
+        try { win.send('pair:cleanAudio', buf, frames); } catch(e) { console.warn('send cleanAudio err:', e.message); }
       }
     },
     (errMsg) => {
       console.warn('native capture err:', errMsg);
-      if (win && !win.isDestroyed()) win.webContents.send('pair:captureError', errMsg);
+      if (win && !win.isDestroyed()) win.send('pair:captureError', errMsg);
     }
   );
   addon._running = true;
   const fmt = addon.getFormat();
   console.log('native capture: started, format=',JSON.stringify(fmt));
-  if (win && !win.isDestroyed()) win.webContents.send('pair:captureFormat', fmt);
+  if (win && !win.isDestroyed()) win.send('pair:captureFormat', fmt);
 }
 function stopNativeCapture() {
   const addon = nativeCapture;
