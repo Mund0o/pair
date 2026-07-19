@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include <napi.h>
 #include <windows.h>
 #include <mmdeviceapi.h>
@@ -8,16 +9,17 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 
 class Capture {
 public:
   std::vector<float> refRing;
   std::mutex refMutex;
-  uint64_t refWritten=0;    // total ref samples written (monotonic, mod RING_SIZE)
+  uint64_t refWritten=0;
   float estimatedGain=0.5f;
-  int bestDelay=2048;       // initial ~43ms at 48kHz
+  int bestDelay=2048;
   bool runningFlag=false;
-  static constexpr int RING_SIZE=96000;  // 2s ring buffer
+  static constexpr int RING_SIZE=96000;
 
   IMMDeviceEnumerator* enumerator=nullptr;
   IMMDevice* device=nullptr;
@@ -34,8 +36,12 @@ public:
 
   void start(Napi::Function dataCbFn,Napi::Function errCbFn){
     if(runningFlag)return;
-    dataCb=Napi::ThreadSafeFunction::New(dataCbFn.Env(),dataCbFn,"data",0,1);
-    errCb=Napi::ThreadSafeFunction::New(errCbFn.Env(),errCbFn,"err",0,1);
+    dataCb=Napi::ThreadSafeFunction::New(
+      dataCbFn.Env(),dataCbFn,Napi::String::New(dataCbFn.Env(),"data"),0,1
+    );
+    errCb=Napi::ThreadSafeFunction::New(
+      errCbFn.Env(),errCbFn,Napi::String::New(errCbFn.Env(),"err"),0,1
+    );
     HRESULT hr=initWasapi();
     if(FAILED(hr)){
       char m[128];sprintf(m,"WASAPI init failed: 0x%08lX",(unsigned long)hr);
@@ -48,8 +54,8 @@ public:
   void stop(){
     runningFlag=false;
     if(captureThread.joinable())captureThread.join();
-    if(dataCb){dataCb.Release();}
-    if(errCb){errCb.Release();}
+    if(dataCb){dataCb.Release();dataCb=nullptr;}
+    if(errCb){errCb.Release();errCb=nullptr;}
   }
 
   void pushRef(float* data,size_t frames){
@@ -115,7 +121,7 @@ private:
   }
 
   void updateDelay(float* captured,int frames,int sr){
-    if(refWritten<(uint64_t)(sr*0.05))return; // need at least 50ms of ref data
+    if(refWritten<(uint64_t)(sr*0.05))return;
     static int counter=0;
     if(++counter%30!=0)return;
 
@@ -174,17 +180,20 @@ private:
       }else memcpy(clean.data(),captured.data(),frames*sizeof(float));
     }
 
-    float* buf=new float[frames];
+    float* buf=(float*)calloc(frames,sizeof(float));
     memcpy(buf,clean.data(),frames*sizeof(float));
     UINT32 fCopy=frames;
-    dataCb.BlockingCall([buf,fCopy](Napi::Env e,Napi::Function cb){
+    auto status=dataCb.NonBlockingCall([buf,fCopy](Napi::Env e,Napi::Function cb){
       auto ab=Napi::ArrayBuffer::New(e,buf,fCopy*sizeof(float));
       cb.Call({ab,Napi::Number::New(e,(double)fCopy)});
     });
+    if(status!=napi_ok){
+      free(buf);
+    }
   }
 
   void emitErr(const char* msg){
-    errCb.BlockingCall([msg](Napi::Env e,Napi::Function cb){
+    errCb.NonBlockingCall([msg](Napi::Env e,Napi::Function cb){
       cb.Call({Napi::String::New(e,msg)});
     });
   }
@@ -211,8 +220,16 @@ static Napi::Value Stop(const Napi::CallbackInfo& info){
   return info.Env().Undefined();
 }
 static Napi::Value PushRef(const Napi::CallbackInfo& info){
-  auto buf=info[0].As<Napi::Buffer<float>>();
-  static_cast<Capture*>(info.Data())->pushRef(buf.Data(),buf.Length());
+  float* data=nullptr;
+  size_t len=0;
+  if(info[0].IsBuffer()){
+    auto buf=info[0].As<Napi::Buffer<float>>();
+    data=buf.Data();len=buf.Length();
+  }else if(info[0].IsTypedArray()){
+    auto arr=info[0].As<Napi::TypedArray>();
+    data=(float*)arr.ArrayBuffer().Data();len=arr.ElementLength();
+  }
+  if(data&&len>0)static_cast<Capture*>(info.Data())->pushRef(data,len);
   return info.Env().Undefined();
 }
 static Napi::Value GetFormat(const Napi::CallbackInfo& info){

@@ -11,7 +11,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{380F2E58-E874-50A7-142E-ED6D840D4CFB}</ProjectGuid>
+    <ProjectGuid>{139377FD-1DA0-C185-31F2-879258A3A79A}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>pair-capture</RootNamespace>
     <IgnoreWarnCompileDuplicatedFilename>true</IgnoreWarnCompileDuplicatedFilename>
@@ -23,7 +23,7 @@
     <ConfigurationType>DynamicLibrary</ConfigurationType>
   </PropertyGroup>
   <PropertyGroup Label="Locals">
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>v170</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props"/>
   <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.props"/>
@@ -48,7 +48,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\include\node;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\src;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\openssl\config;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\openssl\openssl\include;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\uv\include;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\zlib;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\v8\include;..\..\node_modules\node-addon-api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\include\node;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\src;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\openssl\config;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\openssl\openssl\include;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\uv\include;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\zlib;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\v8\include;..\..\node_modules\node-addon-api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/Zc:__cplusplus -std:c++20 /Zm2000 %(AdditionalOptions)</AdditionalOptions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <BufferSecurityCheck>true</BufferSecurityCheck>
@@ -60,7 +60,7 @@
       <OmitFramePointers>false</OmitFramePointers>
       <Optimization>Disabled</Optimization>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=pair-capture;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;BUILDING_NODE_EXTENSION;HOST_BINARY=&quot;node.exe&quot;;DEBUG;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=pair-capture;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;ELECTRON_ENSURE_CONFIG_GYPI;USING_ELECTRON_CONFIG_GYPI;V8_COMPRESS_POINTERS;V8_COMPRESS_POINTERS_IN_SHARED_CAGE;V8_31BIT_SMIS_ON_64BIT_ARCH;V8_ENABLE_SANDBOX;V8_EXTERNAL_CODE_SPACE;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;OPENSSL_NO_ASM;BUILDING_NODE_EXTENSION;HOST_BINARY=&quot;node.exe&quot;;DEBUG;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <StringPooling>true</StringPooling>
       <SuppressStartupBanner>true</SuppressStartupBanner>
@@ -72,7 +72,7 @@
       <AdditionalOptions>/LTCG:INCREMENTAL %(AdditionalOptions)</AdditionalOptions>
     </Lib>
     <Link>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;uuid.lib;odbc32.lib;delayimp.lib;&quot;C:\\Users\\benja\\AppData\\Local\\node-gyp\\Cache\\24.16.0\\x64\\node.lib&quot;;ole32.lib;oleaut32.lib</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;uuid.lib;odbc32.lib;delayimp.lib;&quot;C:\\Users\\benja\\AppData\\Local\\node-gyp\\Cache\\37.10.3\\x64\\node.lib&quot;;ole32.lib;oleaut32.lib</AdditionalDependencies>
       <AdditionalOptions>/LTCG:INCREMENTAL /ignore:4199 %(AdditionalOptions)</AdditionalOptions>
       <DelayLoadDLLs>node.exe;%(DelayLoadDLLs)</DelayLoadDLLs>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -84,13 +84,13 @@
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
     <ResourceCompile>
-      <AdditionalIncludeDirectories>C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\include\node;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\src;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\openssl\config;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\openssl\openssl\include;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\uv\include;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\zlib;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\v8\include;..\..\node_modules\node-addon-api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=pair-capture;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;BUILDING_NODE_EXTENSION;HOST_BINARY=&quot;node.exe&quot;;DEBUG;_DEBUG;%(PreprocessorDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\include\node;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\src;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\openssl\config;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\openssl\openssl\include;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\uv\include;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\zlib;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\v8\include;..\..\node_modules\node-addon-api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=pair-capture;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;ELECTRON_ENSURE_CONFIG_GYPI;USING_ELECTRON_CONFIG_GYPI;V8_COMPRESS_POINTERS;V8_COMPRESS_POINTERS_IN_SHARED_CAGE;V8_31BIT_SMIS_ON_64BIT_ARCH;V8_ENABLE_SANDBOX;V8_EXTERNAL_CODE_SPACE;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;OPENSSL_NO_ASM;BUILDING_NODE_EXTENSION;HOST_BINARY=&quot;node.exe&quot;;DEBUG;_DEBUG;%(PreprocessorDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\include\node;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\src;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\openssl\config;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\openssl\openssl\include;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\uv\include;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\zlib;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\v8\include;..\..\node_modules\node-addon-api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\include\node;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\src;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\openssl\config;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\openssl\openssl\include;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\uv\include;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\zlib;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\v8\include;..\..\node_modules\node-addon-api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/Zc:__cplusplus -std:c++20 /Zm2000 %(AdditionalOptions)</AdditionalOptions>
       <BufferSecurityCheck>true</BufferSecurityCheck>
       <DebugInformationFormat>OldStyle</DebugInformationFormat>
@@ -104,7 +104,7 @@
       <OmitFramePointers>true</OmitFramePointers>
       <Optimization>Full</Optimization>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=pair-capture;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;BUILDING_NODE_EXTENSION;HOST_BINARY=&quot;node.exe&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=pair-capture;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;ELECTRON_ENSURE_CONFIG_GYPI;USING_ELECTRON_CONFIG_GYPI;V8_COMPRESS_POINTERS;V8_COMPRESS_POINTERS_IN_SHARED_CAGE;V8_31BIT_SMIS_ON_64BIT_ARCH;V8_ENABLE_SANDBOX;V8_EXTERNAL_CODE_SPACE;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;OPENSSL_NO_ASM;BUILDING_NODE_EXTENSION;HOST_BINARY=&quot;node.exe&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <StringPooling>true</StringPooling>
@@ -117,7 +117,7 @@
       <AdditionalOptions>/LTCG:INCREMENTAL %(AdditionalOptions)</AdditionalOptions>
     </Lib>
     <Link>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;uuid.lib;odbc32.lib;delayimp.lib;&quot;C:\\Users\\benja\\AppData\\Local\\node-gyp\\Cache\\24.16.0\\x64\\node.lib&quot;;ole32.lib;oleaut32.lib</AdditionalDependencies>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;uuid.lib;odbc32.lib;delayimp.lib;&quot;C:\\Users\\benja\\AppData\\Local\\node-gyp\\Cache\\37.10.3\\x64\\node.lib&quot;;ole32.lib;oleaut32.lib</AdditionalDependencies>
       <AdditionalOptions>/LTCG:INCREMENTAL /ignore:4199 %(AdditionalOptions)</AdditionalOptions>
       <DelayLoadDLLs>node.exe;%(DelayLoadDLLs)</DelayLoadDLLs>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -129,8 +129,8 @@
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
     <ResourceCompile>
-      <AdditionalIncludeDirectories>C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\include\node;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\src;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\openssl\config;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\openssl\openssl\include;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\uv\include;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\zlib;C:\Users\benja\AppData\Local\node-gyp\Cache\24.16.0\deps\v8\include;..\..\node_modules\node-addon-api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=pair-capture;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;BUILDING_NODE_EXTENSION;HOST_BINARY=&quot;node.exe&quot;;%(PreprocessorDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\include\node;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\src;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\openssl\config;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\openssl\openssl\include;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\uv\include;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\zlib;C:\Users\benja\AppData\Local\node-gyp\Cache\37.10.3\deps\v8\include;..\..\node_modules\node-addon-api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=pair-capture;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;ELECTRON_ENSURE_CONFIG_GYPI;USING_ELECTRON_CONFIG_GYPI;V8_COMPRESS_POINTERS;V8_COMPRESS_POINTERS_IN_SHARED_CAGE;V8_31BIT_SMIS_ON_64BIT_ARCH;V8_ENABLE_SANDBOX;V8_EXTERNAL_CODE_SPACE;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;OPENSSL_NO_ASM;BUILDING_NODE_EXTENSION;HOST_BINARY=&quot;node.exe&quot;;%(PreprocessorDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -140,7 +140,7 @@
     <ClCompile Include="..\pair-capture.cc">
       <ObjectFileName>$(IntDir)\pair-capture.obj</ObjectFileName>
     </ClCompile>
-    <ClCompile Include="C:\Users\benja\AppData\Roaming\npm\node_modules\node-gyp\src\win_delay_load_hook.cc"/>
+    <ClCompile Include="C:\Users\benja\Documents\discordult\node_modules\node-gyp\src\win_delay_load_hook.cc"/>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
   <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets"/>

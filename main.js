@@ -2,10 +2,11 @@ const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, screen } 
 
 let mainWin = null;
 let pendingSourceId = null;
+let pendingSources = [];
 
 ipcMain.handle('pair:getSources', async () => {
-  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } });
-  return sources.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
+  pendingSources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } });
+  return pendingSources.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
 ipcMain.on('pair:setPendingSource', (_e, id) => { pendingSourceId = id; });
 
@@ -176,18 +177,13 @@ app.whenReady().then(() => {
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const useId = pendingSourceId;
     pendingSourceId = null;
-    desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 320, height: 240 } })
-      .then(sources => {
-        if (!sources.length) { callback({}); return }
-        const src = useId ? sources.find(s => s.id === useId) : null;
-        if (!src) {
-          const pd = screen.getPrimaryDisplay();
-          callback({ video: sources.find(s => s.display_id === String(pd.id)) || sources.find(s => s.name === 'Entire Screen') || sources[0], audio: request.audioRequested ? 'loopback' : undefined });
-        } else {
-          callback({ video: src, audio: request.audioRequested ? 'loopback' : undefined });
-        }
-      })
-      .catch(e => { console.error('Display media request error:', e); callback({}) });
+    const src = useId ? pendingSources.find(s => s.id === useId) : null;
+    if (!src) {
+      const pd = screen.getPrimaryDisplay();
+      callback({ video: pendingSources.find(s => s.display_id === String(pd.id)) || pendingSources.find(s => s.name === 'Entire Screen') || pendingSources[0], audio: request.audioRequested ? 'loopback' : undefined });
+    } else {
+      callback({ video: src, audio: request.audioRequested ? 'loopback' : undefined });
+    }
   });
   createWindow();
   startAutoUpdater();
@@ -212,6 +208,7 @@ function loadNativeCapture() {
   try {
     const addon = require('./addon/build/Release/pair-capture');
     nativeCapture = addon;
+    console.log('Native capture addon loaded successfully');
     return addon;
   } catch (e) {
     console.warn('Native capture addon not available:', e.message);
@@ -224,23 +221,29 @@ function startNativeCapture(win) {
   if (addon._running) return;
   console.log('native capture: starting...');
   let cbCount=0;
-  addon.start(
-    (buf, frames) => {
-      cbCount++;
-      if (cbCount%50===0) console.log('native capture: data cb #'+cbCount+' frames='+frames);
-      if (win && !win.isDestroyed()) {
-        try { win.send('pair:cleanAudio', buf, frames); } catch(e) { console.warn('send cleanAudio err:', e.message); }
+  try {
+    addon.start(
+      (buf, frames) => {
+        cbCount++;
+        if (cbCount%50===0) console.log('native capture: data cb #'+cbCount+' frames='+frames);
+        if (win && !win.isDestroyed()) {
+          try { win.send('pair:cleanAudio', buf, frames); } catch(e) { console.warn('send cleanAudio err:', e.message); }
+        }
+      },
+      (errMsg) => {
+        console.warn('native capture err:', errMsg);
+        if (win && !win.isDestroyed()) win.send('pair:captureError', errMsg);
       }
-    },
-    (errMsg) => {
-      console.warn('native capture err:', errMsg);
-      if (win && !win.isDestroyed()) win.send('pair:captureError', errMsg);
-    }
-  );
-  addon._running = true;
-  const fmt = addon.getFormat();
-  console.log('native capture: started, format=',JSON.stringify(fmt));
-  if (win && !win.isDestroyed()) win.send('pair:captureFormat', fmt);
+    );
+    addon._running = true;
+    const fmt = addon.getFormat();
+    console.log('native capture: started, format=',JSON.stringify(fmt));
+    if (win && !win.isDestroyed()) win.send('pair:captureFormat', fmt);
+  } catch(e) {
+    console.warn('native capture start failed:', e.message);
+    addon._running = false;
+    if (win && !win.isDestroyed()) win.send('pair:captureError', 'Start failed: '+e.message);
+  }
 }
 function stopNativeCapture() {
   const addon = nativeCapture;
@@ -262,5 +265,7 @@ ipcMain.on('pair:captureRef', (_event, buf) => {
   if(refCount%50===0)console.log('native capture: ref #'+refCount+' bytes='+(buf?.byteLength||buf?.length));
   const addon = nativeCapture;
   if (!addon || !addon._running) { if(refCount===1)console.warn('native capture: ref sent but addon not running'); return; }
-  try { addon.pushReference(buf); } catch (e) { console.warn('pushReference error:', e); }
+  // IPC delivers ArrayBuffer; addon expects a Node.js Buffer
+  const b = Buffer.from(buf);
+  try { addon.pushReference(b); } catch (e) { console.warn('pushReference error:', e); }
 });

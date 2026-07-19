@@ -117,7 +117,8 @@ function escapeHtml(s){const d=document.createElement('div');d.textContent=s;ret
 function addMessage(text,mine=false){
   $('.empty')?.remove();
   const el=document.createElement('div');el.className='message '+(mine?'mine':'');
-  const bubble=document.createElement('div');bubble.className='bubble';bubble.innerHTML=renderContent(text);
+  const isEmoji=/^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\u20E3]+$/u.test(text.trim());
+  const bubble=document.createElement('div');bubble.className='bubble'+(isEmoji?' emoji-only':'');bubble.innerHTML=renderContent(text);
   const meta=document.createElement('div');meta.className='meta';meta.textContent=(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
   el.append(bubble,meta);messages.append(el);messages.scrollTop=messages.scrollHeight;
 }
@@ -204,16 +205,17 @@ function giphyFetch(endpoint,type,query,offset){
   const apiKey=window._giphyKey||'LtCRMfaqI1JFzONkJJFRJ8ktT3EdOoTL';
   const base=type==='stickers'?'stickers':'gifs';
   const off=offset?`&offset=${offset}`:'';
-  if(query)return fetch(`https://api.giphy.com/v1/${base}/${endpoint}?api_key=${apiKey}&q=${encodeURIComponent(query)}&limit=24&rating=g${off}`).then(r=>r.json());
-  return fetch(`https://api.giphy.com/v1/${base}/trending?api_key=${apiKey}&limit=24&rating=g${off}`).then(r=>r.json());
+  if(giphyFetch._cooldown>Date.now())return Promise.resolve({data:[]});
+  const url=query?`https://api.giphy.com/v1/${base}/${endpoint}?api_key=${apiKey}&q=${encodeURIComponent(query)}&limit=24&rating=g${off}`:`https://api.giphy.com/v1/${base}/trending?api_key=${apiKey}&limit=24&rating=g${off}`;
+  return fetch(url).then(r=>{if(r.status===429){giphyFetch._cooldown=Date.now()+10000;console.warn('giphy 429, cooling 10s');return{data:[]}}return r.json()}).catch(()=>({data:[]}));
 }
 function klipyFetch(type,query,offset){
   const key='wDEDuoSRgy4oajhdMGJ7gtS2cFBB3DtWULsUYodKIRhcXvHreSPr6eNM3nm0oWc1';
   const params=new URLSearchParams({key,limit:'24',contentfilter:'off',media_filter:'gif,tinygif,webm,tinywebm'});
   if(type==='stickers')params.set('searchfilter','sticker');
   if(offset)params.set('page',Math.floor(offset/24)+1);
-  if(query){params.set('q',query);return fetch(`https://api.klipy.com/v1/search?${params}`).then(r=>r.json())}
-  return fetch(`https://api.klipy.com/v1/featured?${params}`).then(r=>r.json());
+  const url=query?`https://api.klipy.com/v1/search?${params}&q=${encodeURIComponent(query)}`:`https://api.klipy.com/v1/featured?${params}`;
+  return fetch(url,{headers:{Accept:'application/json'}}).then(r=>{if(!r.ok||r.status===204){if(r.status!==204)console.warn('klipy err',r.status);return{results:[]}}return r.json()}).catch(e=>{console.warn('klipy fail',e.message);return{results:[]}});
 }
 function klipyShare(id){try{fetch(`https://api.klipy.com/v1/registershare?key=wDEDuoSRgy4oajhdMGJ7gtS2cFBB3DtWULsUYodKIRhcXvHreSPr6eNM3nm0oWc1&id=${id}`)}catch{}}
 function giphyAnalytics(giphyId,type){
@@ -247,8 +249,8 @@ function loadMerged(query,resultsEl,type,offset,append){
   if(!append)resultsEl.innerHTML='<span class="gif-hint">Loading…</span>';
   resultsEl._loading=type+':'+query+':'+(offset||0);
   Promise.all([
-    giphyFetch('search',type,query,offset).then(d=>(d.data||[]).map(g=>{const t=g.images?.fixed_width?.url||g.images?.original?.url;const f=g.images?.original?.url||t;return{id:g.id,thumb:t,fullUrl:f,klipy:false,giphyType:type}})).catch(()=>[]),
-    klipyFetch(type,query,offset).then(d=>(d.results||[]).map(k=>{const fm=k.media_formats||{};return{id:k.id,thumb:fm.tinygif?.url||fm.gif?.url,fullUrl:fm.gif?.url||fm.tinygif?.url,klipy:true}})).catch(()=>[])
+    giphyFetch('search',type,query,offset).then(d=>(d.data||[]).map(g=>{const im=g.images?.downsized||g.images?.fixed_width||{};const t=im.url||g.images?.original?.url;const f=g.images?.original?.url||t;return{id:g.id,thumb:t,thumbW:parseInt(im.width)||200,thumbH:parseInt(im.height)||150,fullUrl:f,klipy:false,giphyType:type}})).catch(()=>[]),
+    klipyFetch(type,query,offset).then(d=>(d.results||[]).map(k=>{const fm=k.media_formats||{};const t=fm.tinygif?.url||fm.gif?.url;const f=fm.gif?.url||fm.tinygif?.url;return{id:k.id,thumb:t,thumbW:parseInt(fm.tinygif?.dims?.[0])||200,thumbH:parseInt(fm.tinygif?.dims?.[1])||150,fullUrl:f,klipy:true}})).catch(()=>[])
   ]).then(([giphyItems,klipyItems])=>{
     if(resultsEl._loading!==type+':'+query+':'+(offset||0))return;
     if(!append)resultsEl.innerHTML='';
@@ -268,6 +270,8 @@ function renderItem(item,resultsEl){
   if(!item.thumb||!item.fullUrl)return;
   const btn=document.createElement('button');btn.className='gif-result';
   const img=document.createElement('img');img.src=item.thumb;img.loading='lazy';
+    // Remove inline aspectRatio — CSS `width:100%;height:auto` preserves natural ratio
+    // if(item.thumbW&&item.thumbH){img.style.aspectRatio=item.thumbW+'/'+item.thumbH}
   btn.append(img);
   const isFav=getFavs().some(f=>f.id===item.id);
   const star=document.createElement('span');star.className='gif-star'+(isFav?' on':'');star.textContent='★';star.title='Favorite';
@@ -370,7 +374,7 @@ function setupPeer(){
   }catch(e){console.warn('Silent audio track failed, using addTransceiver:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null}}
   logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid:'null'));
   let gestureGuard=false;
-  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){if(remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject){logCallEvent('Screen audio received');const scPlay=()=>{const p=remoteScreen.play();if(p&&p.catch)p.catch(()=>{})};scPlay();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{scPlay()},{once:true});document.addEventListener('keydown',()=>{scPlay()},{once:true})};return}logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);if(remoteAudio.srcObject&&remoteAudio.srcObject!==e.streams[0]){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else{remoteAudio.srcObject=stream}remoteAudio.muted=false;remoteAudio.volume=0;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
+  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){console.log('[AUDIO] ontrack audio, screenObj=',!!remoteScreen.srcObject,'streamMatch=',remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject,'streamId=',e.streams[0]?.id,'screenId=',remoteScreen.srcObject?.id);if(remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject){logCallEvent('Screen audio received');console.log('[AUDIO] routing to remoteScreen');const scPlay=()=>{const p=remoteScreen.play();if(p&&p.catch)p.catch(()=>{})};scPlay();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{scPlay()},{once:true});document.addEventListener('keydown',()=>{scPlay()},{once:true})};return}logCallEvent('Audio track received from friend');console.log('[AUDIO] routing to remoteAudio');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);if(remoteAudio.srcObject&&remoteAudio.srcObject!==e.streams[0]){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else{remoteAudio.srcObject=stream}remoteAudio.muted=false;remoteAudio.volume=0;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=510000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=510000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('stereo'))m+='; stereo=0';if(!m.includes('sprop-stereo'))m+='; sprop-stereo=0';return m})}
@@ -382,7 +386,7 @@ function patchVideoSdp(sdp){
     let section=m;
     section=section.replace(/\nb=AS:\d+/g,'');
     section=section.replace(/\na=x-google-(?:min|max)-bitrate:\d+/g,'');
-    return section+'a=x-google-min-bitrate:15000\na=x-google-max-bitrate:300000\n';
+    return section+'a=x-google-max-bitrate:400000\n';
   });
 }
 function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
@@ -657,7 +661,7 @@ async function startCall(){
   const gen=callGen;
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
-    localStream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:48000,channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
+    localStream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:48000,channelCount:1,echoCancellation:true},video:false});
     if(!pc){localStream.getTracks().forEach(t=>t.stop());localStream=null;return}
     const track=localStream.getAudioTracks()[0];
     const allTransceivers=pc.getTransceivers();
@@ -746,67 +750,107 @@ async function renegotiate(){
   }catch(e){console.warn('renegotiate error',e)}
   renegPending=false;
 }
-// Native WASAPI capture setup: captures system audio via C++ addon, subtracts
-// Pair's voice (the reference) to prevent echo, outputs clean track.
+// JS NLMS echo canceller: reads screen-capture audio + remote voice reference
+// from two ScriptProcessors in one AudioContext, subtracts the remote voice
+// from the screen audio to prevent echo, outputs a clean MediaStream track.
 async function setupNativeScreenCapture(){
+  const rawTrack=screenStream?.getAudioTracks()[0];
+  console.log('[AEC] rawTrack=',!!rawTrack);
+  if(!rawTrack){console.log('[AEC] no raw screen track');return null}
   const refStream=remoteAudio.srcObject;
-  console.log('native capture: refStream=',!!refStream,refStream?.getAudioTracks().length);
-  if(!refStream||!refStream.getAudioTracks().length)return null;
-  screenOutCtx=new AudioContext();if(screenOutCtx.state==='suspended')await screenOutCtx.resume();
-  console.log('native capture: outCtx state=',screenOutCtx.state);
-  screenOutDest=screenOutCtx.createMediaStreamDestination();
-  screenOutDest.channelCount=1;
-  screenCleanBuf=new Float32Array(480000);
-  screenCleanWP=0;screenCleanRP=0;screenCleanAvail=0;
-  const bufSize=1024;
-  screenOutNode=screenOutCtx.createScriptProcessor(bufSize,0,1);
-  screenOutNode.onaudioprocess=e=>{
-    const out=e.outputBuffer.getChannelData(0);
-    if(screenCleanAvail>=out.length){for(let i=0;i<out.length;i++){out[i]=screenCleanBuf[screenCleanRP];screenCleanRP=(screenCleanRP+1)%screenCleanBuf.length;screenCleanAvail-=out.length}
-    }else out.fill(0);
-  };
-  screenOutNode.connect(screenOutDest);
-  screenRefCtx=new AudioContext();if(screenRefCtx.state==='suspended')await screenRefCtx.resume();
-  console.log('native capture: refCtx state=',screenRefCtx.state);
-  const refSource=screenRefCtx.createMediaStreamSource(refStream);
-  screenRefNode=screenRefCtx.createScriptProcessor(bufSize,1,1);
-  let refCount=0;
-  screenRefNode.onaudioprocess=e=>{
-    refCount++;
-    if(refCount%10===0)console.log('native capture: ref callback #'+refCount);
-    const inData=e.inputBuffer.getChannelData(0);
-    if(window.pairCapture)try{window.pairCapture.pushReference(inData.buffer.slice(inData.byteOffset,inData.byteOffset+inData.byteLength))}catch(err){console.warn('pushReference err:',err)}
-  };
-  const refMute=screenRefCtx.createGain();refMute.gain.value=0;
-  screenRefNode.connect(refMute);refMute.connect(screenRefCtx.destination);
-  refSource.connect(screenRefNode);
-  let cleanCount=0;
-  const unsub=window.pairCapture.onCleanAudio((buf,frames)=>{
-    cleanCount++;
-    if(cleanCount%10===0)console.log('native capture: clean callback #'+cleanCount,'frames:',frames,'avail:',screenCleanAvail);
-    const data=new Float32Array(buf);
-    for(let i=0;i<data.length&&screenCleanAvail<screenCleanBuf.length;i++){screenCleanBuf[screenCleanWP]=data[i];screenCleanWP=(screenCleanWP+1)%screenCleanBuf.length;screenCleanAvail++}
-  });
-  const unsubErr=window.pairCapture.onError(msg=>{console.warn('capture err:',msg)});
-  screenCaptureCleanup=()=>{try{unsub()}catch{};try{unsubErr()}catch{}};
-  await new Promise(r=>setTimeout(r,200));
-  window.pairCapture.start();
-  console.log('native capture: started');
-  screenNative=true;
-  const t=screenOutDest.stream.getAudioTracks()[0];
-  console.log('native capture: returns track=',!!t,t?.enabled,t?.kind);
-  return t;
+
+  // Path 1: Native WASAPI addon with NLMS echo cancellation
+  if(window.pairCapture){
+    console.log('[AEC] trying native addon');
+    let ctx, dest, addonData=false, aecTimedOut=false;
+    try{
+      ctx=new AudioContext();
+      if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
+      dest=ctx.createMediaStreamDestination();dest.channelCount=1;
+      const RS=96000;const cleanBuf=new Float32Array(RS);
+      let wp=0,avail=0;
+      const unsubClean=window.pairCapture.onCleanAudio((buf,frames)=>{
+        if(!aecTimedOut){
+          addonData=true;
+          const arr=new Float32Array(buf);
+          for(let i=0;i<arr.length&&avail<RS;i++){cleanBuf[wp]=arr[i];wp=(wp+1)%RS;avail++}
+        }
+      });
+      window.pairCapture.onError(msg=>console.warn('[AEC] capture error:',msg));
+      window.pairCapture.start();
+      let refProc;
+      if(refStream&&refStream.getAudioTracks().length){
+        const refSource=ctx.createMediaStreamSource(refStream);
+        refProc=ctx.createScriptProcessor(1024,1,0);
+        refProc.onaudioprocess=e=>{
+          const d=e.inputBuffer.getChannelData(0);
+          const ab=d.buffer.slice(d.byteOffset,d.byteOffset+d.byteLength);
+          window.pairCapture.pushReference(ab);
+        };
+        refSource.connect(refProc);
+      }
+      await new Promise(r=>setTimeout(r,3000));
+      if(!addonData){
+        console.warn('[AEC] addon no data in 3s, falling back');
+        aecTimedOut=true;
+        if(unsubClean)unsubClean();
+        window.pairCapture.stop();
+        if(refProc)try{refProc.disconnect()}catch{}
+        if(ctx)try{ctx.close()}catch{}
+        ctx=null;
+      }else{
+        console.log('[AEC] addon producing data, using clean track');
+        const B=1024;
+        const op=ctx.createScriptProcessor(B,0,1);
+        op.onaudioprocess=e=>{
+          const out=e.outputBuffer.getChannelData(0);
+          if(avail<out.length)return;
+          const rp=(wp-avail+RS)%RS;
+          for(let i=0;i<out.length;i++)out[i]=cleanBuf[(rp+i)%RS];
+          avail-=out.length;
+        };
+        op.connect(dest);
+        screenOutCtx=ctx;screenOutDest=dest;
+        screenNative=true;
+        const t=dest.stream.getAudioTracks()[0];
+        console.log('[AEC] returning clean track=',!!t);
+        screenCaptureCleanup=()=>{if(unsubClean)unsubClean();window.pairCapture.stop();try{if(refProc)refProc.disconnect()}catch{};try{op.disconnect()}catch{}};
+        return t;
+      }
+    }catch(e){
+      console.warn('[AEC] addon path error:',e.message);
+      if(ctx)try{ctx.close()}catch{}
+    }
+  }
+
+  // Path 2: HPF filter on raw audio (reduces echo muddiness)
+  console.log('[AEC] trying HPF path');
+  try{
+    const ctx=new AudioContext();
+    if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
+    const src=ctx.createMediaStreamSource(new MediaStream([rawTrack]));
+    const hp=ctx.createBiquadFilter();
+    hp.type='highpass';hp.frequency.value=300;hp.Q.value=0.7;
+    const dest=ctx.createMediaStreamDestination();dest.channelCount=1;
+    src.connect(hp);hp.connect(dest);
+    screenOutCtx=ctx;screenOutDest=dest;
+    const t=dest.stream.getAudioTracks()[0];
+    console.log('[AEC] HPF track=',!!t);
+    screenCaptureCleanup=()=>{try{src.disconnect()}catch{};try{hp.disconnect()}catch{}};
+    return t;
+  }catch(e){
+    console.warn('[AEC] HPF failed:',e.message);
+  }
+
+  // Path 3: Raw unprocessed audio
+  console.log('[AEC] using raw track');
+  return rawTrack;
 }
 function cleanupNativeScreenCapture(){
   screenNative=false;
   if(screenCaptureCleanup){try{screenCaptureCleanup()}catch{};screenCaptureCleanup=null}
-  if(window.pairCapture)try{window.pairCapture.stop()}catch{}
-  if(screenRefNode){try{screenRefNode.disconnect()}catch{};screenRefNode=null}
-  if(screenRefCtx){try{screenRefCtx.close()}catch{};screenRefCtx=null}
-  if(screenOutNode){try{screenOutNode.disconnect()}catch{};screenOutNode=null}
   if(screenOutDest){screenOutDest=null}
   if(screenOutCtx){try{screenOutCtx.close()}catch{};screenOutCtx=null}
-  screenCleanBuf=null;screenCleanWP=0;screenCleanRP=0;screenCleanAvail=0;
 }
 async function startScreenShare(){
   if(screenActive||!pc)return;
@@ -829,9 +873,10 @@ async function startScreenShare(){
   }
   try{
     const preset=SCREEN_PRESETS[screenPreset.value];
-    const constraints=preset?{video:{...preset}}:{video:true};
-    constraints.video.cursor='always';
-    constraints.audio=screenAudioOn?(preset?{echoCancellation:false,autoGainControl:false,noiseSuppression:false}:true):false;
+    const v=preset?{...preset}:{};
+    v.cursor='always';
+    const constraints={video:v};
+    constraints.audio=screenAudioOn?(preset?{echoCancellation:true,autoGainControl:false,noiseSuppression:false}:true):false;
     const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
     screenStream=stream;
@@ -840,16 +885,22 @@ async function startScreenShare(){
     // Add the video track
     let sender;
     try{sender=pc.addTrack(track,stream)}catch{stream.getTracks().forEach(t=>t.stop());return}
-    // Audio: use raw system audio. Native WASAPI capture adds extra AudioContexts
-    // and ScriptProcessor nodes on the main thread that compete with video encoding
-    // for CPU, causing screen-share lag. Raw audio from getDisplayMedia is cheaper.
-    const audioTrack=stream.getAudioTracks()[0];
-    if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
-    // Detect GPU-accelerated codecs and order accordingly:
-    //   AV1 if HW → highest quality on modern GPUs
-    //   H264/H265 if no AV1 HW → universal GPU fallback
-    //   VP8/VP9 → software fallback
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){let gpu=[];await Promise.allSettled(['video/AV1','video/H264','video/H265'].map(mt=>navigator.mediaCapabilities?.encodingInfo({type:'webrtc',video:{codec:mt,width:1920,height:1080,bitrate:300_000_000,framerate:60}}).then(r=>r.powerEfficient&&gpu.push(mt)))).catch(()=>{});const order=gpu.includes('video/AV1')?['video/AV1','video/H264','video/H265','video/VP9','video/VP8']:gpu.length?[...new Set([...gpu,'video/AV1','video/H264','video/H265','video/VP9','video/VP8'])]:['video/H264','video/H265','video/AV1','video/VP9','video/VP8'];const cs=order.map(mt=>caps.codecs.find(c=>c.mimeType===mt)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
+    // Audio: try JS echo canceller (subtracts remote voice from screen capture
+    // audio via NLMS adaptive filter in Web Audio). Falls back to raw audio
+    // when there's no active call (no reference voice to cancel).
+    let audioTrack=stream.getAudioTracks()[0];
+    console.log('[AUDIO] raw stream audio tracks:',stream.getAudioTracks().length,'got:',!!audioTrack);
+    if(audioTrack){
+      try{
+        const cleanTrack=await setupNativeScreenCapture();
+        console.log('[AUDIO] cleanTrack from canceller:',!!cleanTrack);
+        if(cleanTrack){audioTrack=cleanTrack;console.log('[AUDIO] using clean track, label:',audioTrack.label)}
+      }catch(e){console.warn('[AUDIO] canceller exception:',e)}
+      console.log('[AUDIO] adding track to PC: kind='+audioTrack.kind+' enabled='+audioTrack.enabled+' readyState='+audioTrack.readyState+' label='+audioTrack.label);
+      try{pc.addTrack(audioTrack,stream);console.log('[AUDIO] addTrack OK')}catch(e){console.warn('[AUDIO] addTrack failed:',e)}
+    }else console.warn('[AUDIO] no audio track in screen stream');
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=['video/AV1','video/VP9','video/H264','video/VP8'].map(mt=>caps.codecs.find(c=>c.mimeType===mt)).filter(Boolean);if(cs.length){tr.setCodecPreferences(cs);console.log('[VIDEO] codecs:',cs.map(c=>c.mimeType+' '+c.sdpFmtpLine?.slice(0,20)).join(', '))}else console.warn('[VIDEO] no codecs match')}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
+    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=400_000_000;await sender.setParameters(p);console.log('[VIDEO] bitrate=400Mbps no deg pref')}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
