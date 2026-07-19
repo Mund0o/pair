@@ -259,14 +259,14 @@ function renderItem(item,resultsEl){
   const existingBtns=composer.querySelectorAll('button');
   const sendBtn=existingBtns[0];
   // Plus button
+  const plusWrap=document.createElement('div');plusWrap.style.cssText='position:relative;display:inline-flex';
   const plusBtn=document.createElement('button');plusBtn.type='button';plusBtn.className='composer-btn plus-btn';plusBtn.textContent='+';plusBtn.title='Attach';
   const plusPopup=document.createElement('div');plusPopup.className='plus-popup';plusPopup.hidden=true;
   const fileOpt=document.createElement('button');fileOpt.className='plus-opt';fileOpt.textContent='📎 Send file';
   fileOpt.onclick=()=>{plusPopup.hidden=true;fileInput.click()};
-  plusPopup.append(fileOpt);composer.style.position='relative';composer.append(plusPopup);
+  plusPopup.append(fileOpt);plusWrap.append(plusBtn,plusPopup);composer.insertBefore(plusWrap,sendBtn.nextSibling);
   plusBtn.onclick=e=>{e.preventDefault();plusPopup.hidden=!plusPopup.hidden;emojiPicker&&(emojiPicker.hidden=true);gifPicker&&(gifPicker.hidden=true)};
-  composer.insertBefore(plusBtn,sendBtn.nextSibling);
-  // Emoji button
+  document.addEventListener('click',e=>{if(!plusWrap.contains(e.target))plusPopup.hidden=true});
   emojiBtn=document.createElement('button');emojiBtn.type='button';emojiBtn.className='composer-btn emoji-btn';emojiBtn.textContent='😊';emojiBtn.title='Emoji';
   emojiPicker=buildEmojiPicker();emojiPicker.style.position='absolute';emojiPicker.style.bottom='100%';emojiPicker.style.right='60px';
   composer.append(emojiPicker);
@@ -282,7 +282,6 @@ function renderItem(item,resultsEl){
   const orig=messageInput.disabled;
   Object.defineProperty(messageInput,'disabled',{set(v){this._disabled=v;if(v){this.setAttribute('disabled','')}else{this.removeAttribute('disabled')}sendBtn.disabled=v;emojiBtn.disabled=v;gifBtn.disabled=v;plusBtn.disabled=v},get(){return this._disabled!==false}});
   messageInput.disabled=orig;
-  document.addEventListener('click',e=>{if(!plusPopup.contains(e.target)&&e.target!==plusBtn)plusPopup.hidden=true});
 })();
 function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
         // call→leave cycle still plays the leave tone instead of going silent.
