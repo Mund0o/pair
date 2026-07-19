@@ -816,14 +816,13 @@ async function startScreenShare(){
     // Add the video track
     let sender;
     try{sender=pc.addTrack(track,stream)}catch{stream.getTracks().forEach(t=>t.stop());return}
-    // Audio: try native WASAPI capture (echo-free), fall back to raw system audio.
+    // Audio: use raw system audio. Native WASAPI capture adds extra AudioContexts
+    // and ScriptProcessor nodes on the main thread that compete with video encoding
+    // for CPU, causing screen-share lag. Raw audio from getDisplayMedia is cheaper.
     const audioTrack=stream.getAudioTracks()[0];
-    let nativeTrack=null;
-    if(audioTrack&&window.pairCapture)try{nativeTrack=await setupNativeScreenCapture()}catch(e){console.warn('native capture err:',e)}
-    if(nativeTrack){audioTrack.stop();try{pc.addTrack(nativeTrack,new MediaStream([nativeTrack]))}catch{}
-    }else if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
+    if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
     // Prefer AV1 then VP9 then VP8 codec order
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/VP9','video/VP8','video/AV1','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/AV1','video/VP9','video/VP8','video/H264','video/H265'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
@@ -833,7 +832,7 @@ async function startScreenShare(){
     track.onended=()=>{if(screenActive)stopScreenShare()};
     await renegotiate();if(gen!==screenGen)return;
     // Set encoding params AFTER renegotiation so Chrome doesn't reset them.
-    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){const presetVal=SCREEN_PRESETS[screenPreset.value];const maxFps=presetVal?.video?.frameRate||30;p.encodings.forEach(e=>{e.maxBitrate=10_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=Math.min(maxFps,30)});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
+    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=300_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
   }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
 }
 async function stopScreenShare(fromEnd){
