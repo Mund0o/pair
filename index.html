@@ -80,14 +80,8 @@
           <form id="messageForm" class="composer"><input id="messageInput" autocomplete="off" placeholder="Write a message…" disabled /><button class="send" disabled>Send</button></form>
           <audio id="remoteAudio" autoplay></audio>
         </div>
-        <aside class="files card">
-          <div class="section-heading"><div><p class="eyebrow">04 / TRANSFER</p><h2>Files</h2></div><div class="heading-actions"><span class="limit">UP TO 120 GB</span><button id="clearTransfers" class="text-button" hidden>Clear list</button></div></div>
-          <input id="fileInput" type="file" hidden multiple disabled />
-          <button id="chooseFiles" class="dropzone" disabled><span class="upload-icon">↑</span><strong>Choose files</strong><small>Encrypted locally, sent peer to peer</small></button>
-          <div id="transfers" class="transfers"><p class="muted small">No transfers yet.</p></div>
-          <p class="footnote">Files are encrypted before they leave your device. Keep this tab open while sending or receiving.</p>
-        </aside>
       </section>
+      <div hidden><input id="fileInput" type="file" multiple /><div id="transfers"></div></div>
       <footer><span>WebRTC data channel · AES-GCM payload encryption</span><span id="fingerprint">Keys generated on connect</span></footer>
     </main>
     <script src="app.js"></script>

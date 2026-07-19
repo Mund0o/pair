@@ -4,7 +4,7 @@ let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promis
 const SCREEN_PRESETS={'480p30':{width:{ideal:854,max:854},height:{ideal:480,max:480},frameRate:{ideal:30,max:30}},'720p30':{width:{ideal:1280,max:1280},height:{ideal:720,max:720},frameRate:{ideal:30,max:30}},'720p60':{width:{ideal:1280,max:1280},height:{ideal:720,max:720},frameRate:{ideal:60,max:60}},'1080p30':{width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:30,max:30}},'1080p60':{width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:60,max:60}},'1440p60':{width:{ideal:2560,max:2560},height:{ideal:1440,max:1440},frameRate:{ideal:60,max:60}},'4k60':{width:{ideal:3840,max:3840},height:{ideal:2160,max:2160},frameRate:{ideal:60,max:60}}};
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
-let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0;
+let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0,reconnectCall=false;
 // Native WASAPI loopback capture with echo cancellation (subtracts Pair's voice).
 let screenNative=false,screenRefCtx=null,screenRefNode=null,screenOutCtx=null,screenOutNode=null,screenOutDest=null,screenCleanBuf=null,screenCleanWP=0,screenCleanRP=0,screenCleanAvail=0,screenCaptureCleanup=null;
 // Direct handle to the audio transceiver created in setupPeer, so startCall can
@@ -51,7 +51,9 @@ function setupPermanentAudioSink(){
     }
     if(ctx._pairSinkArmed)ctx._pairSinkArmed=false;
     if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}
-    try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.destination);ctx.audioSink=src}catch{}
+    if(!ctx.audioGain){ctx.audioGain=ctx.createGain();ctx.audioGain.connect(ctx.destination)}
+    (async()=>{try{const saved=await ss('volume');if(saved!==null){const v=parseFloat(saved);if(v>=0&&v<=1){ctx.audioGain.gain.value=v;const sv=Math.round(v*100);if(sv!==parseInt(volumeSlider.value))volumeSlider.value=sv}}}catch{}})()
+    try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.audioGain);ctx.audioSink=src}catch{}
   }catch{}
 }
 // Separate WebSocket used to relay file bytes (E2EE) between peers. Reuses the
@@ -81,14 +83,207 @@ let sendAbort=new Map(),fileSeq=0;
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
 const enc=new TextEncoder(),dec=new TextDecoder();
-function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('button').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('button').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
+function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));[messageInput,chooseFiles].forEach(x=>x.disabled=false);messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{[messageInput,chooseFiles].forEach(x=>x.disabled=true);messageForm.querySelector('.send').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
 function cleanSignal(s){return JSON.parse(atob(s.trim()))}function makeSignal(o){return btoa(JSON.stringify(o))}
 async function keyPair(){return crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveBits'])}async function exportPub(k){return crypto.subtle.exportKey('jwk',k)}async function importPub(j){return crypto.subtle.importKey('jwk',j,{name:'ECDH',namedCurve:'P-256'},false,[])}
 let deriveGen=0;async function derive(local,remote){const gen=++deriveGen;const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);const fp=await crypto.subtle.digest('SHA-256',bits);$('#fingerprint').textContent='Session key fingerprint: '+[...new Uint8Array(fp)].slice(0,4).map(b=>b.toString(16).padStart(2,'0')).join('');if(gen!==deriveGen)return;const key=await crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt']);if(gen===deriveGen)sharedKey=key;}
 async function seal(value){const iv=crypto.getRandomValues(new Uint8Array(12));const data=typeof value==='string'?enc.encode(value):value;const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},sharedKey,data);return {iv:[...iv],data:[...new Uint8Array(ct)]}}async function sealBytes(value){const iv=crypto.getRandomValues(new Uint8Array(12));const data=await crypto.subtle.encrypt({name:'AES-GCM',iv},sharedKey,value);return {iv:[...iv],data}}
 async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(o.iv)},sharedKey,new Uint8Array(o.data)))}
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
-function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}function addMessage(text,mine=false){$('.empty')?.remove();const el=document.createElement('div');el.className='message '+(mine?'mine':'');el.innerHTML='<div class="bubble"></div><div class="meta">'+(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+'</div>';el.querySelector('.bubble').textContent=text;messages.append(el);messages.scrollTop=messages.scrollHeight}
+function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}
+function renderContent(text){
+  const urlRegex=/(https?:\/\/[^\s<]+)/g;
+  const parts=[];let last=0,m;
+  while((m=urlRegex.exec(text))!==null){
+    if(m.index>last)parts.push({t:'text',v:text.slice(last,m.index)});
+    const url=m[1];
+    const imgExt=/\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i;
+    const ytMatch=url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
+    if(ytMatch)parts.push({t:'youtube',v:ytMatch[1],url});
+    else if(imgExt.test(url))parts.push({t:'image',v:url});
+    else parts.push({t:'link',v:url});
+    last=m.index+m[0].length;
+  }
+  if(last<text.length)parts.push({t:'text',v:text.slice(last)});
+  return parts.map(p=>{
+    if(p.t==='text')return escapeHtml(p.v);
+    if(p.t==='link')return '<a href="'+p.v+'" target="_blank" rel="noopener">'+escapeHtml(p.v)+'</a>';
+    if(p.t==='image')return '<img src="'+p.v+'" loading="lazy" class="embed-img" onclick="window.open(this.src)" referrerpolicy="no-referrer" />';
+    if(p.t==='youtube')return '<div class="embed-yt"><iframe src="https://www.youtube-nocookie.com/embed/'+p.v+'" allowfullscreen loading="lazy"></iframe></div>';
+    return '';
+  }).join('');
+}
+function escapeHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function addMessage(text,mine=false){
+  $('.empty')?.remove();
+  const el=document.createElement('div');el.className='message '+(mine?'mine':'');
+  const bubble=document.createElement('div');bubble.className='bubble';bubble.innerHTML=renderContent(text);
+  const meta=document.createElement('div');meta.className='meta';meta.textContent=(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+  el.append(bubble,meta);messages.append(el);messages.scrollTop=messages.scrollHeight;
+}
+// --- Emoji Picker ------------------------------------------------------------
+const EMOJI_CATS=[
+  {name:'Smileys',emojis:['😀','😃','😄','😁','😅','😂','🤣','🥲','☺️','😊','😇','🙂','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🥳','🤩','😏','😞','😔','😟','😕','🙁','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬','🤯','😳','🥵','🥶','😱','😨','😰','😥','😓','🤗','🤔','🤭','🤫','🤥','😶','😐','😑','😬','🙄','😯','😦','😧','😮','😲','🥱','😴','🤤','😪','😵','🤐','🥴','🤢','🤮','🤧','😷','🤒','🤕','🤑','🤠','😈','👿','👹','👺','💀','☠️','👻','👽','👾','🤖','💩','😺','😸','😹','😻','😼','😽','🙀','😿','😾']},
+  {name:'Gestures',emojis:['👋','🤚','🖐','✋','🖖','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','👍','👎','✊','👊','🤛','🤜','👏','🙌','🫶','👐','🤲','🤝','🙏','✍️','💅','🤳','💪','🦵','🦶','👂','🦻','👃','🧠','🫀','🫁','🦷','🦴','👀','👁','👅','👄']},
+  {name:'People',emojis:['👶','🧒','👦','👧','🧑','👱','👨','🧔','👩','🧓','👴','👵','🙍','🙎','🙅','🙆','💁','🙋','🧏','🙇','🤦','🤷','👮','🕵','💂','🥷','👷','🫅','🤴','👸','👳','👲','🧕','🤵','👰','🤰','🫃','🫄','👼','🎅','🤶','🦸','🦹','🧙','🧚','🧛','🧜','🧝','🧞','🧟','🧌','💆','💇','🚶','🧍','🧎','🏃','💃','🕺','🕴','👯','🧖','🛀','🛌','👭','👫','👬','💏','💑','👪']},
+  {name:'Nature',emojis:['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🐣','🐥','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐜','🦟','🦗','🦂','🐢','🐍','🦎','🦖','🦕','🐙','🦑','🦐','🦞','🦀','🐡','🐠','🐟','🐬','🐳','🐋','🦈','🐊','🐅','🐆','🦓','🦍','🦧','🐘','🦛','🦏','🐪','🐫','🦒','🦘','🦬','🐃','🐂','🐄','🐎','🐖','🐏','🐑','🦙','🐐','🦌','🐕','🐩','🦮','🐈','🐓','🦃','🦤','🦚','🦜','🦢','🦩','🐇','🦝','🦨','🦡','🦫','🦦','🦥','🐁','🐀','🐿','🦔','🐾','🐉','🐲','🌵','🎄','🌲','🌳','🌴','🌱','🌿','☘️','🍀','🎍','🎋','🍃','🍂','🍁','🪺','🪹','🍄','🐚','🪸','🌾','💐','🌷','🌹','🥀','🌺','🌸','🌼','🌻','🌞','🌝','🌛','🌜','🌚','🌕','🌖','🌗','🌘','🌑','🌒','🌓','🌔','🌙','🌎','🌍','🌏','🪐','💫','⭐','🌟','✨','⚡','☄️','💥','🔥','🌪','🌈','☀️','🌤','⛅','🌥','☁️','🌦','🌧','⛈','🌩','🌨','❄️','☃️','⛄','🌬','💨','💧','💦','🫧','🌊']},
+  {name:'Food',emojis:['🍏','🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🥬','🥒','🌶','🫑','🌽','🥕','🫒','🧄','🧅','🥔','🍠','🫘','🥐','🍞','🥖','🥨','🧀','🥚','🍳','🧈','🥞','🧇','🥓','🥩','🍗','🍖','🦴','🌭','🍔','🍟','🍕','🫓','🥪','🥙','🧆','🌮','🌯','🫔','🥗','🥘','🫕','🥫','🍝','🍜','🍲','🍛','🍣','🍱','🥟','🦪','🍤','🍙','🍚','🍘','🍥','🥠','🥮','🍢','🍡','🍧','🍨','🍦','🥧','🧁','🍰','🎂','🍮','🍭','🍬','🍫','🍿','🍩','🍪','🌰','🥜','🍯','🥛','🍼','🫖','☕','🍵','🧃','🥤','🧋','🍶','🍺','🍻','🥂','🍷','🫗','🥃','🍸','🍹','🧉','🍾','🧊','🥄','🍴','🥄','🔪','🫙','🏺']},
+  {name:'Activity',emojis:['⚽','🏀','🏈','⚾','🥎','🎾','🏐','🏉','🥏','🎱','🪀','🏓','🏸','🏒','🏑','🥍','🏏','🪃','🥅','⛳','🪁','🏹','🎣','🤿','🥊','🥋','🎽','🛹','🛼','🛷','⛸','🥌','🎿','⛷','🏂','🪂','🏋','🤼','🤸','🤺','⛹','🤾','🏌','🏇','🧘','🏄','🏊','🤽','🚣','🧗','🚵','🚴','🎪','🎭','🎨','🎬','🎤','🎧','🎼','🎹','🥁','🪘','🎷','🎺','🪗','🎸','🪕','🎻','🎲','♟️','🎯','🎳','🎮','🕹','🎰']},
+  {name:'Travel',emojis:['🚗','🚙','🚕','🚌','🚎','🏎','🚓','🚑','🚒','🚐','🛻','🚚','🚛','🚜','🏍','🛵','🛺','🚲','🛴','🛹','🚏','🛣','🛤','⛽','🛞','🚨','🚥','🚦','🛑','🚧','⚓','🛟','⛵','🛶','🚤','🛳','⛴','🚢','✈️','🛩','🛫','🛬','🪂','💺','🚁','🚟','🚠','🚡','🛰','🚀','🛸','🏠','🏡','🏘','🏢','🏣','🏤','🏥','🏦','🏨','🏩','🏪','🏫','🏬','🏭','🏯','🏰','💒','🗼','🗽','⛪','🕌','🛕','🕍','⛩','🕋','⛲','⛺','🌁','🌃','🏙','🌄','🌅','🌆','🌇','🌉','🗾','🏔','⛰','🌋','🗻','🏕','🏖','🏜','🏝','🏟']},
+  {name:'Objects',emojis:['⌚','📱','💻','⌨','🖥','🖨','🖱','🖲','🕹','🗜','💽','💾','💿','📀','📼','📷','📸','📹','🎥','📽','🎞','📞','☎️','📟','📠','📺','📻','🎙','🎚','🎛','🧭','⏱','⏲','⏰','🕰','⌛','⏳','📡','🔋','🪫','🔌','💡','🔦','🕯','🪔','🧯','🗑','🛢','🪠','💸','💵','💴','💶','💷','🪙','💰','💳','💎','⚖️','🧰','🪛','🔧','🔨','⚒','🛠','⛏','🪚','🔩','⚙','🪤','🧱','⛓','🧲','🔫','💣','🧨','🪓','🔪','🗡','⚔️','🛡','🚬','⚰','🪦','⚱','🏺','🔮','📿','🧿','🪬','💈','⚗','🔭','🔬','🕳','🩻','🩼','🩺','💊','💉','🩸','🧬','🦠','🧫','🧪','🌡','🧹','🪥','🧺','🧻','🚽','🚰','🚿','🛁','🛀','🧼','🪒','🪮','🧽','🪣','🧴','🛎','🔑','🗝','🚪','🪑','🛋','🛏','🛌','🧸','🪆','🖼','🪞','🪟','🛍','🛒','🎁','🎈','🎏','🎀','🪄','🪅','🎊','🎉','🎎','🏮','🎐','🧧','✉️','📩','📨','📧','💌','📥','📤','📦','🏷','🪧','📪','📫','📬','📭','📮','📯','📜','📃','📄','📑','🧾','📊','📈','📉','🗒','🗓','📆','📅','🗑','📇','🗃','🗳','🗄','📋','📁','📂','🗂','🗞','📰','📓','📔','📒','📕','📗','📘','📙','📚','📖','🔖','🧷','🔗','📎','🖇','📐','📏','🧮','📌','📍','✂️','🖊','🖋','✒️','🖌','🖍','📝','✏️','🔍','🔎','🔏','🔐','🔑','🔒','🔓']},
+  {name:'Symbols',emojis:['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉','☸️','✡️','🔯','🕎','☯️','☦️','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','⚛️','🉑','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷','✴️','🆚','💮','🉐','㊙️','㊗️','🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💢','♨️','🚷','🚯','🚳','🚱','🔞','📵','🚭','❗','❕','❓','❔','‼️','⁉️','🔅','🔆','〽️','⚠️','🚸','🔱','⚜️','🔰','♻️','✅','🈯','💹','❇️','✳️','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾','♿','🅿️','🈳','🈂️','🛂','🛃','🛄','🛅','🛜','🚹','🚺','🚼','⚧','🚻','🚮','🎦','📶','🈁','🔣','🔤','🆡','🆢','🆣','🆤','🆥','🆦','🆧','🆨','🆩','🆪','🆫','🆬','🀄','🃏','🎴','🆒','🆓','🆕','🆖','🆗','🆙']},
+  {name:'Flags',emojis:['🏳️','🏴','🏁','🚩','🎌','🏴‍☠️','🇺🇳','🇦🇫','🇦🇱','🇩🇿','🇦🇸','🇦🇩','🇦🇴','🇦🇮','🇦🇶','🇦🇬','🇦🇷','🇦🇲','🇦🇼','🇦🇺','🇦🇹','🇦🇿','🇧🇸','🇧🇭','🇧🇩','🇧🇧','🇧🇾','🇧🇪','🇧🇿','🇧🇯','🇧🇲','🇧🇹','🇧🇴','🇧🇦','🇧🇼','🇧🇷','🇧🇳','🇧🇬','🇧🇫','🇧🇮','🇨🇻','🇰🇭','🇨🇲','🇨🇦','🇨🇫','🇹🇩','🇨🇱','🇨🇳','🇨🇴','🇰🇲','🇨🇩','🇨🇬','🇨🇷','🇨🇮','🇭🇷','🇨🇺','🇨🇾','🇨🇿','🇩🇰','🇩🇯','🇩🇲','🇩🇴','🇪🇨','🇪🇬','🇸🇻','🇬🇶','🇪🇷','🇪🇪','🇸🇿','🇪🇹','🇫🇯','🇫🇮','🇫🇷','🇬🇦','🇬🇲','🇬🇪','🇩🇪','🇬🇭','🇬🇷','🇬🇩','🇬🇹','🇬🇳','🇬🇼','🇬🇾','🇭🇹','🇭🇳','🇭🇺','🇮🇸','🇮🇳','🇮🇩','🇮🇷','🇮🇶','🇮🇪','🇮🇱','🇮🇹','🇯🇲','🇯🇵','🇯🇴','🇰🇿','🇰🇪','🇰🇮','🇰🇼','🇰🇬','🇱🇦','🇱🇻','🇱🇧','🇱🇸','🇱🇷','🇱🇾','🇱🇮','🇱🇹','🇱🇺','🇲🇬','🇲🇼','🇲🇾','🇲🇻','🇲🇱','🇲🇹','🇲🇭','🇲🇷','🇲🇺','🇲🇽','🇫🇲','🇲🇩','🇲🇨','🇲🇳','🇲🇪','🇲🇦','🇲🇿','🇲🇲','🇳🇦','🇳🇷','🇳🇵','🇳🇱','🇳🇿','🇳🇮','🇳🇪','🇳🇬','🇰🇵','🇲🇰','🇳🇴','🇴🇲','🇵🇰','🇵🇼','🇵🇸','🇵🇦','🇵🇬','🇵🇾','🇵🇪','🇵🇭','🇵🇱','🇵🇹','🇶🇦','🇷🇴','🇷🇺','🇷🇼','🇰🇳','🇱🇨','🇻🇨','🇼🇸','🇸🇲','🇸🇹','🇸🇦','🇸🇳','🇷🇸','🇸🇨','🇸🇱','🇸🇬','🇸🇰','🇸🇮','🇸🇧','🇸🇴','🇿🇦','🇰🇷','🇸🇸','🇪🇸','🇱🇰','🇸🇩','🇸🇷','🇸🇪','🇨🇭','🇸🇾','🇹🇼','🇹🇯','🇹🇿','🇹🇭','🇹🇱','🇹🇬','🇹🇴','🇹🇹','🇹🇳','🇹🇷','🇹🇲','🇹🇻','🇺🇬','🇺🇦','🇦🇪','🇬🇧','🇺🇸','🇺🇾','🇺🇿','🇻🇺','🇻🇦','🇻🇪','🇻🇳','🇾🇪','🇿🇲','🇿🇼']}
+];
+let emojiPicker=null,emojiBtn=null,gifPicker=null,gifBtn=null;
+function buildEmojiPicker(){
+  const wrap=document.createElement('div');wrap.className='emoji-picker';wrap.hidden=true;
+  const tabs=document.createElement('div');tabs.className='emoji-tabs';
+  const body=document.createElement('div');body.className='emoji-body';
+  EMOJI_CATS.forEach((cat,i)=>{
+    const tab=document.createElement('button');tab.className='emoji-tab'+(i===0?' active':'');tab.textContent=cat.name[0]+cat.name[1];
+    tab.onclick=()=>{body.querySelectorAll('.emoji-page').forEach(p=>p.hidden=true);body.children[i].hidden=false;tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));tab.classList.add('active')};
+    tabs.append(tab);
+    const page=document.createElement('div');page.className='emoji-page';page.hidden=i!==0;
+    cat.emojis.forEach(e=>{
+      const btn=document.createElement('button');btn.className='emoji-item';btn.textContent=e;
+      btn.onclick=()=>{const inp=messageInput;const s=inp.selectionStart;const v=inp.value;inp.value=v.slice(0,s)+e+v.slice(inp.selectionEnd);inp.selectionStart=inp.selectionEnd=s+e.length;inp.focus();wrap.hidden=true};
+      page.append(btn);
+    });
+    body.append(page);
+  });
+  wrap.append(tabs,body);
+  // Close on outside click
+  document.addEventListener('click',e=>{if(!wrap.contains(e.target)&&e.target!==emojiBtn)wrap.hidden=true});
+  return wrap;
+}
+function buildGifPicker(){
+  const wrap=document.createElement('div');wrap.className='gif-picker';wrap.hidden=true;
+  const tabs=document.createElement('div');tabs.className='gif-picker-tabs';
+  const gifTab=document.createElement('button');gifTab.className='gif-picker-tab active';gifTab.textContent='GIFs';
+  const stiTab=document.createElement('button');stiTab.className='gif-picker-tab';stiTab.textContent='Stickers';
+  const favTab=document.createElement('button');favTab.className='gif-picker-tab';favTab.textContent='Favs';
+  tabs.append(gifTab,stiTab,favTab);
+  const searchRow=document.createElement('div');searchRow.className='gif-search-row';
+  const inp=document.createElement('input');inp.className='gif-search-input';inp.placeholder='Search…';
+  const results=document.createElement('div');results.className='gif-results';
+  let currentType='gifs',timer=null;
+  function setType(t){
+    currentType=t;const isFav=t==='favs';
+    gifTab.classList.toggle('active',t==='gifs');stiTab.classList.toggle('active',t==='stickers');favTab.classList.toggle('active',isFav);
+    inp.hidden=isFav;searchRow.hidden=isFav;
+    if(isFav)renderFavs(results);
+    else{inp.placeholder=t==='gifs'?'Search GIFs…':'Search Stickers…';loadMerged('',results,t)}
+  }
+  gifTab.onclick=()=>setType('gifs');
+  stiTab.onclick=()=>setType('stickers');
+  favTab.onclick=()=>setType('favs');
+  inp.oninput=()=>{
+    clearTimeout(timer);const q=inp.value.trim();
+    timer=setTimeout(()=>{if(q)loadMerged(q,results,currentType);else loadMerged('',results,currentType)},400);
+  };
+  searchRow.append(inp);wrap.append(tabs,searchRow,results);
+  document.addEventListener('click',e=>{if(!wrap.contains(e.target)&&e.target!==gifBtn)wrap.hidden=true});
+  return wrap;
+}
+function giphyFetch(endpoint,type,query){
+  const apiKey=window._giphyKey||'LtCRMfaqI1JFzONkJJFRJ8ktT3EdOoTL';
+  const base=type==='stickers'?'stickers':'gifs';
+  if(query)return fetch(`https://api.giphy.com/v1/${base}/${endpoint}?api_key=${apiKey}&q=${encodeURIComponent(query)}&limit=24&rating=g`).then(r=>r.json());
+  return fetch(`https://api.giphy.com/v1/${base}/trending?api_key=${apiKey}&limit=24&rating=g`).then(r=>r.json());
+}
+function klipyFetch(type,query){
+  const key='wDEDuoSRgy4oajhdMGJ7gtS2cFBB3DtWULsUYodKIRhcXvHreSPr6eNM3nm0oWc1';
+  const params=new URLSearchParams({key,limit:'24',contentfilter:'off',media_filter:'gif,tinygif,webm,tinywebm'});
+  if(type==='stickers')params.set('searchfilter','sticker');
+  if(query){params.set('q',query);return fetch(`https://api.klipy.com/v1/search?${params}`).then(r=>r.json())}
+  return fetch(`https://api.klipy.com/v1/featured?${params}`).then(r=>r.json());
+}
+function klipyShare(id){try{fetch(`https://api.klipy.com/v1/registershare?key=wDEDuoSRgy4oajhdMGJ7gtS2cFBB3DtWULsUYodKIRhcXvHreSPr6eNM3nm0oWc1&id=${id}`)}catch{}}
+function giphyAnalytics(giphyId,type){
+  try{fetch('https://api.giphy.com/v1/analytics/action/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action_type:'SENT',action_object_type:type==='stickers'?'sticker':'gif',action_object_id:giphyId})})}catch{}
+}
+function getFavs(){try{const d=localStorage.getItem('pair.gifFavs');return d?JSON.parse(d):[]}catch{return[]}}
+function saveFavs(f){try{localStorage.setItem('pair.gifFavs',JSON.stringify(f))}catch{}}
+function toggleFav(id,url,thumb,type){
+  let favs=getFavs();const i=favs.findIndex(f=>f.id===id);
+  if(i===-1)favs.push({id,url,thumb,type});else favs.splice(i,1);
+  saveFavs(favs);return i===-1;
+}
+function renderFavs(resultsEl){
+  resultsEl.innerHTML='';const favs=getFavs();
+  if(!favs.length){resultsEl.innerHTML='<span class="gif-hint">No favorites yet</span>';return}
+  favs.forEach(f=>{
+    const btn=document.createElement('button');btn.className='gif-result';
+    const img=document.createElement('img');img.src=f.thumb;img.loading='lazy';
+    btn.append(img);
+    btn.onclick=async()=>{const msg=f.url;if(msg&&sharedKey){send({t:'msg',v:await seal(msg)});addMessage(msg,true);const wrap=resultsEl.parentElement;wrap.hidden=true};analyticsShared(f.type||f)};
+    // Context menu to remove
+    btn.oncontextmenu=e=>{e.preventDefault();toggleFav(f.id);renderFavs(resultsEl)};
+    resultsEl.append(btn);
+  });
+}
+function analyticsShared(item){
+  if(item.klipy)klipyShare(item.id);
+  else giphyAnalytics(item.id,item.giphyType||'gifs');
+}
+function loadMerged(query,resultsEl,type){
+  resultsEl.innerHTML='<span class="gif-hint">Loading…</span>';
+  Promise.all([
+    giphyFetch('search',type,query).then(d=>(d.data||[]).map(g=>{const t=g.images?.fixed_width?.url||g.images?.original?.url;const f=g.images?.original?.url||t;return{id:g.id,thumb:t,fullUrl:f,klipy:false,giphyType:type}})).catch(()=>[]),
+    klipyFetch(type,query).then(d=>(d.results||[]).map(k=>{const fm=k.media_formats||{};return{id:k.id,thumb:fm.tinygif?.url||fm.gif?.url,fullUrl:fm.gif?.url||fm.tinygif?.url,klipy:true}})).catch(()=>[])
+  ]).then(([giphyItems,klipyItems])=>{
+    resultsEl.innerHTML='';const maxLen=Math.max(giphyItems.length,klipyItems.length);
+    for(let i=0;i<maxLen;i++){
+      if(i<giphyItems.length)renderItem(giphyItems[i],resultsEl);
+      if(i<klipyItems.length)renderItem(klipyItems[i],resultsEl);
+    }
+    if(!giphyItems.length&&!klipyItems.length)resultsEl.innerHTML='<span class="gif-hint">No results</span>';
+  }).catch(()=>{resultsEl.innerHTML='<span class="gif-hint">Error loading</span>'});
+}
+function renderItem(item,resultsEl){
+  if(!item.thumb||!item.fullUrl)return;
+  const btn=document.createElement('button');btn.className='gif-result';
+  const img=document.createElement('img');img.src=item.thumb;img.loading='lazy';
+  btn.append(img);
+  const isFav=getFavs().some(f=>f.id===item.id);
+  const star=document.createElement('span');star.className='gif-star'+(isFav?' on':'');star.textContent='★';star.title='Favorite';
+  star.onclick=e=>{e.stopPropagation();const on=toggleFav(item.id,item.fullUrl,item.thumb,item);star.classList.toggle('on',on)};
+  btn.append(star);
+  btn.onclick=async()=>{if(item.fullUrl&&sharedKey){send({t:'msg',v:await seal(item.fullUrl)});addMessage(item.fullUrl,true);const wrap=resultsEl.parentElement;wrap.hidden=true;const si=wrap.querySelector('.gif-search-input');if(si)si.value='';resultsEl.innerHTML=''};analyticsShared(item)};
+  resultsEl.append(btn);
+}
+// Initialise pickers once sharedKey is set (i.e. after connection).
+(function initChatExtras(){
+  // Replace composer: add emoji + gif + plus buttons
+  const composer=messageForm;
+  const existingBtns=composer.querySelectorAll('button');
+  const sendBtn=existingBtns[0];
+  // Plus button
+  const plusBtn=document.createElement('button');plusBtn.type='button';plusBtn.className='composer-btn plus-btn';plusBtn.textContent='+';plusBtn.title='Attach';
+  const plusPopup=document.createElement('div');plusPopup.className='plus-popup';plusPopup.hidden=true;
+  const fileOpt=document.createElement('button');fileOpt.className='plus-opt';fileOpt.textContent='📎 Send file';
+  fileOpt.onclick=()=>{plusPopup.hidden=true;fileInput.click()};
+  plusPopup.append(fileOpt);composer.style.position='relative';composer.append(plusPopup);
+  plusBtn.onclick=e=>{e.preventDefault();plusPopup.hidden=!plusPopup.hidden;emojiPicker&&(emojiPicker.hidden=true);gifPicker&&(gifPicker.hidden=true)};
+  composer.insertBefore(plusBtn,sendBtn.nextSibling);
+  // Emoji button
+  emojiBtn=document.createElement('button');emojiBtn.type='button';emojiBtn.className='composer-btn emoji-btn';emojiBtn.textContent='😊';emojiBtn.title='Emoji';
+  emojiPicker=buildEmojiPicker();emojiPicker.style.position='absolute';emojiPicker.style.bottom='100%';emojiPicker.style.right='60px';
+  composer.append(emojiPicker);
+  emojiBtn.onclick=e=>{e.preventDefault();emojiPicker.hidden=!emojiPicker.hidden;gifPicker&&(gifPicker.hidden=true);plusPopup&&(plusPopup.hidden=true)};
+  composer.insertBefore(emojiBtn,sendBtn.nextSibling);
+  // GIF button
+  gifBtn=document.createElement('button');gifBtn.type='button';gifBtn.className='composer-btn gif-btn';gifBtn.textContent='GIF';gifBtn.title='GIF';
+  gifPicker=buildGifPicker();gifPicker.style.position='absolute';gifPicker.style.bottom='100%';gifPicker.style.right='0';
+  composer.append(gifPicker);
+  gifBtn.onclick=e=>{e.preventDefault();const show=gifPicker.hidden;gifPicker.hidden=!show;emojiPicker&&(emojiPicker.hidden=true);plusPopup&&(plusPopup.hidden=true);if(show){const r=gifPicker.querySelector('.gif-results');const tabs=gifPicker.querySelectorAll('.gif-picker-tab');if(tabs[2]?.classList.contains('active'))renderFavs(r);else{const type=tabs[1]?.classList.contains('active')?'stickers':'gifs';loadMerged('',r,type)}}};
+  composer.insertBefore(gifBtn,sendBtn.nextSibling);
+  // Enable input/button on connect
+  const orig=messageInput.disabled;
+  Object.defineProperty(messageInput,'disabled',{set(v){this._disabled=v;if(v){this.setAttribute('disabled','')}else{this.removeAttribute('disabled')}sendBtn.disabled=v;emojiBtn.disabled=v;gifBtn.disabled=v;plusBtn.disabled=v},get(){return this._disabled!==false}});
+  messageInput.disabled=orig;
+  document.addEventListener('click',e=>{if(!plusPopup.contains(e.target)&&e.target!==plusBtn)plusPopup.hidden=true});
+})();
 function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>setStatus('Connected directly',true);chat.onmessage=async e=>{try{const o=JSON.parse(e.data);if(o.t==='msg')addMessage(dec.decode(await open(o.v)));      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
         // call→leave cycle still plays the leave tone instead of going silent.
         friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}else if(o.t==='screen-start'){logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
@@ -117,8 +312,19 @@ function defaultTurnServers(){try{const pubIp='YOUR_PUBLIC_IP';return[
   {urls:'turn:'+pubIp+':3481?transport=tcp',...SELF_TURN}
 ]}catch{return[]}}
 const ICE_SERVERS=(()=>{try{const e=process.env.PAIR_TURN;if(e)return JSON.parse(e)}catch{}return defaultTurnServers()})();
-function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  let wasEverConnected=false;
-  pc.onconnectionstatechange=()=>{if(!pc)return;if(pc.connectionState==='connected'){screenBtn.disabled=false;screenPreset.disabled=false;if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}    if(!wasEverConnected){wasEverConnected=true}else{setStatus('Connected directly',true);friendLeftNotified=false}}if(['failed','disconnected','closed'].includes(pc.connectionState)){screenBtn.disabled=true;screenPreset.disabled=true;if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}};pc.oniceconnectionstatechange=()=>{if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(pc.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+function setupPeer(){
+  // Close previous pc and associated resources if reconnecting (e.g. peer-left → peer-ready).
+  // Null pc first so the old pc's onconnectionstatechange handler bails (sees !pc).
+  if(pc){
+    const oldPc=pc;pc=null;const oldChat=chat;const oldFiles=files;chat=null;files=null;
+    if(oldPc._connectTimer){clearTimeout(oldPc._connectTimer);oldPc._connectTimer=null}
+    if(oldPc._silentAudioCtx)try{oldPc._silentAudioCtx.close()}catch{}
+    if(oldChat){oldChat.onmessage=null;try{oldChat.close()}catch{}}
+    if(oldFiles){oldFiles.onmessage=null;try{oldFiles.close()}catch{}}
+    try{oldPc.close()}catch{}
+  }
+  pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  let wasEverConnected=false;
+  pc.onconnectionstatechange=()=>{if(!pc)return;if(pc.connectionState==='connected'){screenBtn.disabled=false;screenPreset.disabled=false;if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}    if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}callActive=false;startCall()}}else{setStatus('Connected directly',true);friendLeftNotified=false}}if(['failed','disconnected','closed'].includes(pc.connectionState)){screenBtn.disabled=true;screenPreset.disabled=true;if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}setParticipant(participantFriend,false);setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}};pc.oniceconnectionstatechange=()=>{if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(pc.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
   // network), surface a clear message instead of hanging on "Connecting…" forever.
   let connectTimer=null;pc._connectTimer=null;function armConnectTimeout(){if(connectTimer||pc.connectionState==='connected')return;connectTimer=setTimeout(()=>{pc._connectTimer=null;if(pc&&pc.connectionState!=='connected'&&pc.connectionState!=='failed'&&pc.connectionState!=='closed'){pairHint.textContent='Still connecting… if this persists, one of you is behind a strict NAT/firewall that blocks the peer connection. Try a different network or add a TURN server.'}},25000);pc._connectTimer=connectTimer}
@@ -141,11 +347,11 @@ function setupPeer(){pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onice
   }catch(e){console.warn('Silent audio track failed, using addTransceiver:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null}}
   logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid:'null'));
   let gestureGuard=false;
-  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){if(remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject){logCallEvent('Screen audio received');return}logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0.5;setParticipant(participantFriend,true);e.track.onended=()=>{setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
+  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){if(remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject){logCallEvent('Screen audio received');return}logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);resolve()}};pc.addEventListener('icegatheringstatechange',f);setTimeout(resolve,5000)})}
 function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=510000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=510000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('stereo'))m+='; stereo=0';if(!m.includes('sprop-stereo'))m+='; sprop-stereo=0';return m})}
-// Patch video m-lines with max bandwidth (200 Mbps) and x-google-max-bitrate
+// Patch video m-lines with max bandwidth (300 Mbps) and x-google-max-bitrate
 // to override Chrome's congestion-control bitrate clamping.
 function patchVideoSdp(sdp){
   sdp=sdp.replace(/\r\n/g,'\n');
@@ -153,7 +359,7 @@ function patchVideoSdp(sdp){
     let section=m;
     section=section.replace(/\nb=AS:\d+/g,'');
     section=section.replace(/\na=x-google-(?:min|max)-bitrate:\d+/g,'');
-    return section+'a=x-google-min-bitrate:10000\na=x-google-max-bitrate:200000\n';
+    return section+'a=x-google-min-bitrate:15000\na=x-google-max-bitrate:300000\n';
   });
 }
 function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
@@ -161,8 +367,16 @@ $('#createOffer').onclick=async()=>{if(pc)pc.close();role='offer';setupPeer();co
 $('#createAnswer').onclick=async()=>{try{if(pc)pc.close();role='answer';const remote=cleanSignal(signalIn.value);setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});await derive(kp,remote.pub);const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();signalOut.value=makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)});pairHint.textContent='Send this answer back to the person who made the offer.'}catch(e){pairHint.textContent='Could not create answer: '+e.message}};
 $('#applySignal').onclick=async()=>{try{const remote=cleanSignal(signalIn.value);if(role==='offer'){await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});await derive(pc._kp,remote.pub);pairHint.textContent='Connecting…'}else if(!role)pairHint.textContent='First paste an offer, then click Create answer.'}catch(e){pairHint.textContent='Could not apply signal: '+e.message}};$('#copySignal').onclick=()=>navigator.clipboard?.writeText(signalOut.value);
 messageForm.onsubmit=async e=>{e.preventDefault();const v=messageInput.value.trim();if(!v||!sharedKey)return;send({t:'msg',v:await seal(v)});addMessage(v,true);messageInput.value=''};
-chooseFiles.onclick=()=>fileInput.click();fileInput.onchange=()=>{const files=[...fileInput.files];fileInput.value='';files.forEach(sendFile);};
-function transfer(name,size,dir){const el=document.createElement('div');el.className='transfer';el.innerHTML='<div class="transfer-top"><span class="transfer-name"></span><span class="transfer-status"></span></div><div class="bar"><i></i></div><div class="transfer-stats"><span class="transfer-speed"></span><span class="transfer-eta"></span></div><div class="transfer-peer"></div><div class="transfer-btns"><button class="cancel-btn text-button" hidden>Cancel</button><button class="retry-btn primary" hidden>Retry</button></div>';el.querySelector('.transfer-name').textContent=name+' · '+format(size);transfers.prepend(el);return el}function format(n){return n<1e9?(n/1e6).toFixed(1)+' MB':(n/1e9).toFixed(2)+' GB'}function formatSpeed(bps){if(bps<1e3)return(bps).toFixed(0)+' B/s';if(bps<1e6)return(bps/1e3).toFixed(1)+' KB/s';if(bps<1e9)return(bps/1e6).toFixed(1)+' MB/s';return(bps/1e9).toFixed(2)+' GB/s'}function formatEta(sec){if(!isFinite(sec)||sec<0)return'';sec=Math.round(sec);if(sec<60)return sec+'s';const m=Math.floor(sec/60),s=sec%60;if(m<60)return m+'m '+s+'s';const h=Math.floor(m/60);return h+'h '+(m%60)+'m'}function updateStats(el,done,total,startTime){const elapsed=(performance.now()-startTime)/1000;if(elapsed<0.5)return;const speed=done/elapsed;const remaining=(total-done)/speed;el.querySelector('.transfer-speed').textContent=formatSpeed(speed);el.querySelector('.transfer-eta').textContent=formatEta(remaining)}
+fileInput.onchange=()=>{const files=[...fileInput.files];fileInput.value='';files.forEach(sendFile);};
+function transfer(name,size,dir){
+  const el=document.createElement('div');el.className='transfer';el.innerHTML='<div class="transfer-top"><span class="transfer-name"></span><span class="transfer-status"></span></div><div class="bar"><i></i></div><div class="transfer-stats"><span class="transfer-speed"></span><span class="transfer-eta"></span></div><div class="transfer-peer"></div><div class="transfer-btns"><button class="cancel-btn text-button" hidden>Cancel</button><button class="retry-btn primary" hidden>Retry</button></div>';
+  el.querySelector('.transfer-name').textContent=name+' · '+format(size);
+  const msg=document.createElement('div');msg.className='message'+(dir==='out'?' mine':'');
+  const bub=document.createElement('div');bub.className='bubble';bub.append(el);
+  const meta=document.createElement('div');meta.className='meta';meta.textContent=new Date().toLocaleTimeString();
+  msg.append(bub,meta);messages.append(msg);messages.scrollTop=messages.scrollHeight;
+  return el;
+}function format(n){return n<1e9?(n/1e6).toFixed(1)+' MB':(n/1e9).toFixed(2)+' GB'}function formatSpeed(bps){if(bps<1e3)return(bps).toFixed(0)+' B/s';if(bps<1e6)return(bps/1e3).toFixed(1)+' KB/s';if(bps<1e9)return(bps/1e6).toFixed(1)+' MB/s';return(bps/1e9).toFixed(2)+' GB/s'}function formatEta(sec){if(!isFinite(sec)||sec<0)return'';sec=Math.round(sec);if(sec<60)return sec+'s';const m=Math.floor(sec/60),s=sec%60;if(m<60)return m+'m '+s+'s';const h=Math.floor(m/60);return h+'h '+(m%60)+'m'}function updateStats(el,done,total,startTime){const elapsed=(performance.now()-startTime)/1000;if(elapsed<0.5)return;const speed=done/elapsed;const remaining=(total-done)/speed;el.querySelector('.transfer-speed').textContent=formatSpeed(speed);el.querySelector('.transfer-eta').textContent=formatEta(remaining)}
 // Resolvers for sender-side "peer accepted/rejected" signals, keyed by seq.
 const acceptWait=new Map();
 async function sendFile(file,retryId){try{if(file.size>MAX)return alert('This file is larger than 120 GB.');if(!fileBus())return alert('Connect first, then send a file.');const el=transfer(file.name,file.size,'out');const cancelBtn=el.querySelector('.cancel-btn'),retryBtn=el.querySelector('.retry-btn');cancelBtn.hidden=false;retryBtn.hidden=true;const seq=retryId||++fileSeq;const ctrl={abort:false};sendAbort.set(seq,ctrl);outTransfers.set(seq,el);cancelBtn.onclick=()=>{const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);aw.reject(new Error('Cancelled'))}ctrl.abort=true;cancelBtn.hidden=true;try{if(files&&files.readyState==='open')files.send(JSON.stringify({t:'cancel',seq}))}catch{}};const meta=await seal(JSON.stringify({name:file.name,size:file.size,type:file.type,seq}));sendQueue=sendQueue.then(async()=>{  const t0=performance.now();try{await safeSend(JSON.stringify({t:'start',v:meta}));
@@ -221,7 +435,7 @@ function setPeerPct(el,pct){const p=el.querySelector('.transfer-peer');if(!p)ret
 // held per-seq so nothing is dropped or misrouted.
 const pendingFrames=new Map();
 const acceptCards=new Map();
-function showAcceptCard(meta,seq){const card=document.createElement('div');card.className='transfer accept-card';card.innerHTML='<div class="accept-top"><strong class="accept-name"></strong><span class="accept-size"></span></div><p class="accept-hint">Your friend wants to send you a file.</p><div class="accept-btns"><button class="accept-yes primary">Accept</button><button class="accept-no">Decline</button></div>';card.querySelector('.accept-name').textContent=meta.name;card.querySelector('.accept-size').textContent=' · '+format(meta.size);const yes=card.querySelector('.accept-yes'),no=card.querySelector('.accept-no');  const resolve=new Promise(r=>{const done=v=>{if(acceptCards.get(seq)!==done)return;clearTimeout(acceptTimer);acceptCards.delete(seq);pendingFrames.delete(seq);card.remove();r(v)};const acceptTimer=setTimeout(()=>done(false),60000);acceptCards.set(seq,done);yes.onclick=()=>done(true);no.onclick=()=>done(false)});transfers.prepend(card);return resolve}
+function showAcceptCard(meta,seq){const card=document.createElement('div');card.className='transfer accept-card';card.innerHTML='<div class="accept-top"><strong class="accept-name"></strong><span class="accept-size"></span></div><p class="accept-hint">Your friend wants to send you a file.</p><div class="accept-btns"><button class="accept-yes primary">Accept</button><button class="accept-no">Decline</button></div>';card.querySelector('.accept-name').textContent=meta.name;card.querySelector('.accept-size').textContent=' · '+format(meta.size);const yes=card.querySelector('.accept-yes'),no=card.querySelector('.accept-no');const msg=document.createElement('div');msg.className='message';const bub=document.createElement('div');bub.className='bubble';bub.append(card);const mta=document.createElement('div');mta.className='meta';mta.textContent=new Date().toLocaleTimeString();msg.append(bub,mta);messages.append(msg);messages.scrollTop=messages.scrollHeight;const resolve=new Promise(r=>{const done=v=>{if(acceptCards.get(seq)!==done)return;clearTimeout(acceptTimer);acceptCards.delete(seq);pendingFrames.delete(seq);msg.remove();r(v)};const acceptTimer=setTimeout(()=>done(false),60000);acceptCards.set(seq,done);yes.onclick=()=>done(true);no.onclick=()=>done(false)});return resolve}
 // Per-incoming-file ordered write queue so decrypted chunks hit disk in order
 // even though decryption runs concurrently in a pool.
 function makeWriteQueue(t){let tail=Promise.resolve();return fn=>{tail=tail.then(fn).catch(e=>{t.writeError=e});return tail}}
@@ -312,15 +526,17 @@ async function processIncoming(t){const POOL=8;const queue=t.writeQueue;let acti
 }
 setStatus('Not connected');
 
-(async()=>{async function ss(key){if(window.pairSettings){try{return await window.pairSettings.get(key)}catch{}}try{return localStorage.getItem('pair.'+key)}catch{}}async function ssSet(key,val){if(window.pairSettings){try{await window.pairSettings.set(key,val);return}catch{}}try{localStorage.setItem('pair.'+key,val)}catch{}}const savedServer=await ss('signalServer');const savedRoom=await ss('roomCode');if(savedServer)$('#signalServer').value=savedServer;if(savedRoom)$('#roomCode').value=savedRoom;['signalServer','roomCode'].forEach(id=>$('#'+id).addEventListener('input',()=>ssSet(id==='signalServer'?'signalServer':'roomCode',$('#'+id).value.trim())));})();
-  // Auto-update pulls latest.json directly from GitHub (configured in updater.js),
+async function ss(key){if(window.pairSettings){try{return await window.pairSettings.get(key)}catch{}}try{return localStorage.getItem('pair.'+key)}catch{}}
+async function ssSet(key,val){if(window.pairSettings){try{await window.pairSettings.set(key,val);return}catch{}}try{localStorage.setItem('pair.'+key,val)}catch{}}
+(async()=>{const savedServer=await ss('signalServer');const savedRoom=await ss('roomCode');if(savedServer)$('#signalServer').value=savedServer;if(savedRoom)$('#roomCode').value=savedRoom;['signalServer','roomCode'].forEach(id=>$('#'+id).addEventListener('input',()=>ssSet(id==='signalServer'?'signalServer':'roomCode',$('#'+id).value.trim())));const savedVol=await ss('volume');if(savedVol!==null){const v=parseFloat(savedVol);if(v>=0&&v<=1)$('#volumeSlider').value=Math.round(v*100)}})();
+// Auto-update pulls latest.json directly from GitHub (configured in updater.js),
   // independent of the signaling server. No action needed here.
 
 let signaling;
 async function automaticPair(kind){
   // Tear down any prior session so a second Host/Join click (or host→leave→host)
   // doesn't leak an old pc/signaling whose handlers fire stale signals.
-  if(pc||signaling)disconnectRoom();
+  reconnectCall=callActive;if(pc||signaling)disconnectRoom();
   role=kind; const address=$('#signalServer').value.trim(); const room=$('#roomCode').value.trim();
   if(!address||!room)return pairHint.textContent='Enter a signaling address and room code.';
   pairHint.textContent='Connecting to signaling server…'; signaling=new WebSocket(address);
@@ -329,7 +545,7 @@ async function automaticPair(kind){
   signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);
     if(message.type==='full'){pairHint.textContent='That room already has two people.';return}
     if(message.type==='peer-ready'&&role==='host'){
-      setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
+      reconnectCall=callActive;setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
       const offer=await pc.createOffer();if(!pc)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
       logCallEvent('Diag: offer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
       signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
@@ -395,24 +611,15 @@ function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
   acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;deriveGen++;setParticipant(participantYou,false);setParticipant(participantFriend,false);voiceLog.innerHTML='';setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 $('#leaveRoom').onclick=()=>disconnectRoom();
-// Clear-list button: tears down any in-flight transfers and empties the list.
-const clearBtn=$('#clearTransfers');
-function refreshClearBtn(){const has=transfers.querySelector('.transfer,.accept-card');clearBtn.hidden=!has;}
 function clearTransfers(){
-  // Abort anything still in flight so it doesn't resurrect a card.
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();
   acceptWait.forEach(w=>{try{w.reject(new Error('Cleared'))}catch{}});acceptWait.clear();
   acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();
   activeTransfers.forEach(t=>{t.abort=true;if(t.saveMode==='pair')try{window.pairSave.cancel()}catch{}if(t.writer)try{t.writer.abort()}catch{}});activeTransfers.clear();
   pendingFrames.clear();outTransfers.clear();
-  transfers.innerHTML='<p class="muted small">No transfers yet.</p>';
-  refreshClearBtn();
+  transfers.innerHTML='';
+  messages.querySelectorAll('.message .bubble > .transfer,.message .bubble > .accept-card').forEach(el=>el.closest('.message').remove());
 }
-clearBtn.onclick=clearTransfers;
-// Reveal the Clear button whenever a transfer/accept card is added.
-const _origPrepend=transfers.prepend.bind(transfers);
-transfers.prepend=el=>{_origPrepend(el);refreshClearBtn();return el;};
-refreshClearBtn();
 
 // --- Voice call ---------------------------------------------------------------
 // Start/stop a two-way audio call over the existing peer connection. The audio
@@ -447,7 +654,7 @@ async function startCall(){
     // endCall/disconnectRoom may have run during a nested await; if pc is gone bail.
     if(!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
     callActive=true;callStart=Date.now();callBtn.textContent='⏹ Stop voice';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='🔇 Mute mic';
-    try{remoteAudio.volume=0.5}catch{};volumeSlider.value=50;volumeSlider.hidden=false;
+    try{remoteAudio.volume=0}catch{};volumeSlider.value=50;volumeSlider.hidden=false;
     setParticipant(participantYou,true);logCallEvent('You joined the call');
     playSound('ring');try{send({t:'call-ring'})}catch{}
     callStatus.textContent='Voice live';callStatus.className='call-status live';
@@ -486,7 +693,7 @@ function toggleMute(){
 }
 callBtn.onclick=()=>{if(callActive)endCall(false);else{try{remoteAudio.muted=false;remoteAudio.play()}catch{};setupPermanentAudioSink();startCall()}};
 muteBtn.onclick=toggleMute;
-volumeSlider.oninput=()=>{const v=parseInt(volumeSlider.value)/100;try{remoteAudio.volume=v}catch{}};
+volumeSlider.oninput=()=>{const v=parseInt(volumeSlider.value)/100;try{const ctx=sfxCtx();if(ctx&&ctx.audioGain)ctx.audioGain.gain.value=v}catch{};try{remoteAudio.volume=0}catch{};ssSet('volume',String(v))};
 
 // --- Screen share -------------------------------------------------------------
 // Either peer can start/stop screen share, so either peer can drive a
@@ -624,7 +831,7 @@ async function startScreenShare(){
     track.onended=()=>{if(screenActive)stopScreenShare()};
     await renegotiate();if(gen!==screenGen)return;
     // Set encoding params AFTER renegotiation so Chrome doesn't reset them.
-    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=200_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
+    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=300_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
   }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
 }
 async function stopScreenShare(fromEnd){
@@ -655,7 +862,9 @@ audioToggleBtn.onclick=()=>{screenAudioOn=!screenAudioOn;audioToggleBtn.textCont
 const screenVolWrap=document.createElement('div');screenVolWrap.style.cssText='display:none;position:absolute;bottom:52px;right:12px;z-index:11;background:rgba(0,0,0,.75);border-radius:6px;padding:8px 12px';
 const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Volume';screenVolLabel.style.cssText='color:#fff;font-size:11px;margin-right:8px';
 const screenVol=document.createElement('input');screenVol.type='range';screenVol.min=0;screenVol.max=100;screenVol.value=100;screenVol.style.cssText='width:80px;height:4px;cursor:pointer;accent-color:#5865f2;vertical-align:middle';
-screenVol.oninput=()=>{remoteScreen.volume=screenVol.value/100};
+screenVol.oninput=()=>{remoteScreen.volume=screenVol.value/100;ssSet('screenVol',String(screenVol.value/100))};
+// Restore saved screen volume (fire-and-forget).
+(async()=>{try{const saved=await ss('screenVol');if(saved!==null){const v=parseFloat(saved);if(v>=0&&v<=1){remoteScreen.volume=v;screenVol.value=Math.round(v*100)}}}catch{}})()
 screenVolWrap.appendChild(screenVolLabel);screenVolWrap.appendChild(screenVol);remoteScreen.parentElement.appendChild(screenVolWrap);
 remoteScreen.addEventListener('contextmenu',e=>{e.preventDefault();screenVolWrap.style.display=screenVolWrap.style.display==='none'?'flex':'none';screenVolWrap.style.alignItems='center'});
 document.addEventListener('click',e=>{if(!screenVolWrap.contains(e.target)&&e.target!==remoteScreen)screenVolWrap.style.display='none'});
