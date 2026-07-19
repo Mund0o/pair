@@ -834,8 +834,6 @@ async function startScreenShare(){
     logCallEvent('You started screen sharing');
     track.onended=()=>{if(screenActive)stopScreenShare()};
     await renegotiate();if(gen!==screenGen)return;
-    // Set encoding params AFTER renegotiation so Chrome doesn't reset them.
-    try{const p=sender.getParameters();if(p&&p.encodings&&p.encodings.length){p.encodings.forEach(e=>{e.maxBitrate=300_000_000;e.scaleResolutionDownBy=1;e.maxFramerate=60});p.degradationPreference='maintain-framerate';await sender.setParameters(p)}}catch(e){console.warn('video bitrate:',e)}
   }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
 }
 async function stopScreenShare(fromEnd){
