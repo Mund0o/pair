@@ -821,8 +821,11 @@ async function startScreenShare(){
     // for CPU, causing screen-share lag. Raw audio from getDisplayMedia is cheaper.
     const audioTrack=stream.getAudioTracks()[0];
     if(audioTrack)try{pc.addTrack(audioTrack,stream)}catch{}
-    // Prefer AV1 then VP9 then VP8 codec order
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=[];['video/H264','video/H265','video/VP9','video/AV1','video/VP8'].forEach(mt=>{const c=caps.codecs.find(c=>c.mimeType===mt);if(c)cs.push(c)});if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
+    // Detect GPU-accelerated codecs and order accordingly:
+    //   AV1 if HW → highest quality on modern GPUs
+    //   H264/H265 if no AV1 HW → universal GPU fallback
+    //   VP8/VP9 → software fallback
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){let gpu=[];await Promise.allSettled(['video/AV1','video/H264','video/H265'].map(mt=>navigator.mediaCapabilities?.encodingInfo({type:'webrtc',video:{codec:mt,width:1920,height:1080,bitrate:300_000_000,framerate:60}}).then(r=>r.powerEfficient&&gpu.push(mt)))).catch(()=>{});const order=gpu.includes('video/AV1')?['video/AV1','video/H264','video/H265','video/VP9','video/VP8']:gpu.length?[...new Set([...gpu,'video/AV1','video/H264','video/H265','video/VP9','video/VP8'])]:['video/H264','video/H265','video/AV1','video/VP9','video/VP8'];const cs=order.map(mt=>caps.codecs.find(c=>c.mimeType===mt)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch{}
     if(gen!==screenGen||!pc){try{pc.removeTrack(sender)}catch{};stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
