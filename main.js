@@ -210,6 +210,7 @@ function loadNativeCapture(win) {
     path.join(__dirname, '..', 'addon', 'build', 'Release', 'pair-capture'),
     path.join(process.cwd(), 'addon', 'build', 'Release', 'pair-capture'),
   ];
+  let lastErr = '';
   for (const addonPath of paths) {
     try {
       console.log('Trying addon path:', addonPath);
@@ -218,10 +219,11 @@ function loadNativeCapture(win) {
       console.log('Native capture addon loaded from:', addonPath);
       return addon;
     } catch (e) {
-      console.warn('Addon path failed:', addonPath, '-', e.message);
+      lastErr = e.message;
+      console.warn('Addon path failed:', addonPath, '-', lastErr);
     }
   }
-  const errMsg = 'Addon not built - tried ' + paths.length + ' paths';
+  const errMsg = 'Addon not built: ' + lastErr;
   console.warn(errMsg);
   if (win && !win.isDestroyed()) try { win.send('pair:captureError', errMsg); } catch {}
   return null;

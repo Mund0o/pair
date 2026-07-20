@@ -829,23 +829,67 @@ async function setupNativeScreenCapture(){
     }
   }
 
-  // Path 2: HPF filter on raw audio (reduces echo muddiness)
-  console.log('[AEC] trying HPF path');
+  // Path 2: JS NLMS echo canceller (subtracts remote voice from loopback)
+  console.log('[AEC] trying JS NLMS');
   try{
     const ctx=new AudioContext();
     if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
+    const RS=96000;const refRing=new Float32Array(RS);let refWritten=0,estGain=0.5,bestDly=2048;
+    let refProc,delayEstCnt=0;
+    if(refStream&&refStream.getAudioTracks().length){
+      const refSrc=ctx.createMediaStreamSource(refStream);
+      refProc=ctx.createScriptProcessor(1024,1,0);
+      refProc.onaudioprocess=e=>{
+        const d=e.inputBuffer.getChannelData(0);
+        for(let i=0;i<d.length;i++)refRing[(refWritten+i)%RS]=d[i];
+        refWritten+=d.length;
+      };
+      refSrc.connect(refProc);
+    }
     const src=ctx.createMediaStreamSource(new MediaStream([rawTrack]));
-    const hp=ctx.createBiquadFilter();
-    hp.type='highpass';hp.frequency.value=300;hp.Q.value=0.7;
+    const outP=ctx.createScriptProcessor(1024,1,1);
     const dest=ctx.createMediaStreamDestination();dest.channelCount=1;
-    src.connect(hp);hp.connect(dest);
+    outP.onaudioprocess=e=>{
+      const cap=e.inputBuffer.getChannelData(0);
+      const out=e.outputBuffer.getChannelData(0);
+      if(refWritten>bestDly+cap.length){
+        if(++delayEstCnt%30===0){
+          let bestCorr=0,bestD=bestDly;
+          const minD=480,maxD=7200,n=Math.min(cap.length,256);
+          for(let d=minD;d<maxD;d+=4){
+            let c=0,nc=0,nr=0;
+            for(let i=0;i<n;i++){
+              const cv=cap[i],rv=refRing[(refWritten-d+i)%RS];
+              c+=cv*rv;nc+=cv*cv;nr+=rv*rv;
+            }
+            const denom=Math.sqrt(nc*nr);
+            if(denom>1e-10&&c/denom>bestCorr){bestCorr=c/denom;bestD=d;}
+          }
+          if(bestCorr>0.05)bestDly=Math.round((bestDly*3+bestD)/4);
+          if(delayEstCnt%150===0)console.log('[AEC] JS NLMS gain='+estGain.toFixed(4)+' delay='+bestDly+' corr='+bestCorr.toFixed(3));
+        }
+        for(let i=0;i<cap.length;i++){
+          const r=refRing[(refWritten-bestDly+i)%RS];
+          const c=cap[i];
+          out[i]=c-estGain*r;
+          if(Math.abs(r)>0.001){
+            const num=c*r,den=r*r+1e-10;
+            estGain=0.998*estGain+0.002*num/den;
+            if(estGain<0)estGain=0;
+          }
+        }
+      }else{
+        for(let i=0;i<cap.length;i++)out[i]=cap[i];
+      }
+    };
+    src.connect(outP);outP.connect(dest);
     screenOutCtx=ctx;screenOutDest=dest;
     const t=dest.stream.getAudioTracks()[0];
-    console.log('[AEC] HPF track=',!!t);
-    screenCaptureCleanup=()=>{try{src.disconnect()}catch{};try{hp.disconnect()}catch{}};
+    console.log('[AEC] JS NLMS track=',!!t);
+    screenCaptureCleanup=()=>{try{src.disconnect()}catch{};try{outP.disconnect()}catch{};if(refProc)try{refProc.disconnect()}catch{}};
     return t;
   }catch(e){
-    console.warn('[AEC] HPF failed:',e.message);
+    console.warn('[AEC] JS NLMS failed:',e.message);
   }
 
   // Path 3: Raw unprocessed audio
