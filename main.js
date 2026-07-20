@@ -18,7 +18,6 @@ app.commandLine.appendSwitch('enable-features', 'VaapiVideoDecoder,VaapiVideoEnc
 app.commandLine.appendSwitch('force-gpu-rasterization');
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
-const path = require('path');
 const fs = require('fs');
 require('./server.js');
 
