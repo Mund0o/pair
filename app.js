@@ -835,25 +835,30 @@ async function setupNativeScreenCapture(){
     const ctx=new AudioContext();
     if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
     const RS=96000;const refRing=new Float32Array(RS);let refWritten=0,estGain=0.5,bestDly=2048;
-    let refProc,delayEstCnt=0;
+    let refProc,delayEstCnt=0,bypassCount=0,nlmsLogCount=0;
     if(refStream&&refStream.getAudioTracks().length){
       const refSrc=ctx.createMediaStreamSource(refStream);
       refProc=ctx.createScriptProcessor(1024,1,1);
       const refSilence=ctx.createGain();refSilence.gain.value=0;
+      let refCbCount=0;
       refProc.onaudioprocess=e=>{
+        refCbCount++;
         const d=e.inputBuffer.getChannelData(0);
         for(let i=0;i<d.length;i++)refRing[(refWritten+i)%RS]=d[i];
         refWritten+=d.length;
+        if(refCbCount%30===0)console.log('[AEC] JS ref #'+refCbCount+' written='+refWritten+' rms='+Math.sqrt(d.reduce((s,v)=>s+v*v,0)/d.length).toFixed(5));
       };
       refSrc.connect(refProc);refProc.connect(refSilence);refSilence.connect(ctx.destination);
-    }
+    }else console.log('[AEC] JS NLMS no ref stream');
     const src=ctx.createMediaStreamSource(new MediaStream([rawTrack]));
     const outP=ctx.createScriptProcessor(1024,1,1);
     const dest=ctx.createMediaStreamDestination();dest.channelCount=1;
+    let nlmsActivated=false;
     outP.onaudioprocess=e=>{
       const cap=e.inputBuffer.getChannelData(0);
       const out=e.outputBuffer.getChannelData(0);
       if(refWritten>bestDly+cap.length){
+        if(!nlmsActivated){nlmsActivated=true;console.log('[AEC] JS NLMS ACTIVE refWritten='+refWritten+' bestDly='+bestDly);}
         if(++delayEstCnt%30===0){
           let bestCorr=0,bestD=bestDly;
           const minD=480,maxD=7200,n=Math.min(cap.length,256);
@@ -867,7 +872,7 @@ async function setupNativeScreenCapture(){
             if(denom>1e-10&&c/denom>bestCorr){bestCorr=c/denom;bestD=d;}
           }
           if(bestCorr>0.05)bestDly=Math.round((bestDly*3+bestD)/4);
-          if(delayEstCnt%150===0)console.log('[AEC] JS NLMS gain='+estGain.toFixed(4)+' delay='+bestDly+' corr='+bestCorr.toFixed(3));
+          if(++nlmsLogCount%3===0)console.log('[AEC] JS NLMS gain='+estGain.toFixed(4)+' delay='+bestDly+' corr='+bestCorr.toFixed(3));
         }
         for(let i=0;i<cap.length;i++){
           const r=refRing[(refWritten-bestDly+i)%RS];
@@ -880,7 +885,9 @@ async function setupNativeScreenCapture(){
           }
         }
       }else{
+        bypassCount++;
         for(let i=0;i<cap.length;i++)out[i]=cap[i];
+        if(bypassCount%30===0)console.log('[AEC] JS NLMS BYPASS #'+bypassCount+' refWritten='+refWritten+' need>'+(bestDly+cap.length));
       }
     };
     src.connect(outP);outP.connect(dest);
