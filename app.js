@@ -838,13 +838,14 @@ async function setupNativeScreenCapture(){
     let refProc,delayEstCnt=0;
     if(refStream&&refStream.getAudioTracks().length){
       const refSrc=ctx.createMediaStreamSource(refStream);
-      refProc=ctx.createScriptProcessor(1024,1,0);
+      refProc=ctx.createScriptProcessor(1024,1,1);
+      const refSilence=ctx.createGain();refSilence.gain.value=0;
       refProc.onaudioprocess=e=>{
         const d=e.inputBuffer.getChannelData(0);
         for(let i=0;i<d.length;i++)refRing[(refWritten+i)%RS]=d[i];
         refWritten+=d.length;
       };
-      refSrc.connect(refProc);
+      refSrc.connect(refProc);refProc.connect(refSilence);refSilence.connect(ctx.destination);
     }
     const src=ctx.createMediaStreamSource(new MediaStream([rawTrack]));
     const outP=ctx.createScriptProcessor(1024,1,1);
